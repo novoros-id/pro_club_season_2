@@ -20,3 +20,6 @@
 !git add .
 !git commit -m "Add feature or fix bug"
 !git push https://github.com/novoros-id/pro_club_season_2.git dev-branch
+
+# Установка зависимостей
+!pip install -r requirements.txt
