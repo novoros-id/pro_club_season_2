@@ -12,6 +12,61 @@ class prepare_files:
     def __init__(self, file_name):
         self.file_name = file_name
 
+    def process_file(self):
+        """
+        Анализирует тип файла (видео или аудио), обрабатывает его соответствующим образом,
+        сохраняет результаты рядом с исходным файлом и возвращает пути к ним.
+
+        :return: dict {'video': str or '', 'audio': str or ''}
+        """
+        if not os.path.exists(self.file_name):
+            raise FileNotFoundError(f"Файл {self.file_name} не найден.")
+
+        # Получаем базовое имя и расширение
+        base_path, ext = os.path.splitext(self.file_name)
+        dir_path = os.path.dirname(self.file_name)
+        file_name_only = os.path.basename(base_path)
+
+        # Проверяем, это видео или аудио
+        try:
+            output = subprocess.check_output([
+                "ffprobe", "-v", "error",
+                "-select_streams", "v:0",
+                "-show_entries", "stream=codec_type",
+                "-of", "default=nw=1",
+                self.file_name
+            ], stderr=subprocess.STDOUT).decode('utf-8')
+            is_video = 'video' in output
+        except subprocess.CalledProcessError:
+            is_video = False
+
+        result = {
+            'video': '',
+            'audio': ''
+        }
+
+        if is_video:
+            # Обработка видео — конвертация + извлечение аудио
+            video_output = os.path.join(dir_path, f"{file_name_only}_PV.mp4")
+            audio_output = os.path.join(dir_path, f"{file_name_only}_PA.wav")
+
+            # Конвертируем видео
+            converted_video = self.convert_to_mp4_h264(video_output)
+            result['video'] = converted_video
+
+            # Создаем временный объект для обработки аудио
+            temp_self = prepare_files(converted_video)
+            cleaned_audio = temp_self.extract_clean_audio(audio_output)
+            result['audio'] = cleaned_audio
+
+        else:
+            # Это аудиофайл
+            audio_output = os.path.join(dir_path, f"{file_name_only}_PA.wav")
+            cleaned_audio = self.clean_audio(audio_output)
+            result['audio'] = cleaned_audio
+
+        return result
+
     def check_nvenc_available(self):
         # Проверяет наличие поддержки h264_nvenc в ffmpeg
         try:
@@ -21,20 +76,16 @@ class prepare_files:
             return False
 
     def convert_to_mp4_h264(self, output_video_path=None):
-        #Конвертирует любое видео в .mp4 с кодеком H.264.
-        #Использует GPU (h264_nvenc), если доступно.
-        
-        #:param input_path: путь к исходному видео
-        #:param output_path: путь к выходному файлу (если None — создается автоматически)
-        #:return: путь к сконвертированному файлу
         if not os.path.exists(self.file_name):
             raise FileNotFoundError(f"Файл {self.file_name} не найден.")
 
         # Генерация выходного имени файла
+        base, _ = os.path.splitext(self.file_name)
         if output_video_path is None:
-            base, _ = os.path.splitext(self.file_name)
             output_path = base + "_converted.mp4"
-        
+        else:
+            output_path = output_video_path  # Просто используем указанный путь
+
         # Получение кодека видео
         try:
             codec = subprocess.check_output([
@@ -46,7 +97,7 @@ class prepare_files:
             ]).decode('utf-8').strip()
         except subprocess.CalledProcessError:
             raise RuntimeError("Ошибка при анализе файла через ffprobe.")
-        
+
         ext = os.path.splitext(self.file_name)[1].lower()
 
         # Если уже правильный формат
