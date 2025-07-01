@@ -43,5 +43,6 @@ class text_to_paragraphs:
         #for idx, paragraph in enumerate(paragraphs, start=1):
         #    print(f"Абзац {idx}: {paragraph}")
         #return paragraph
-        result = '\n'.join(paragraphs)
+        #result = '\n'.join(paragraphs)
+        result = '\n'.join(f"\t{paragraph}" for paragraph in paragraphs)
         return result
