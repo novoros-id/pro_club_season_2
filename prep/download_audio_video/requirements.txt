@@ -1,12 +1,1 @@
 requests
-yt-dlp
-ffmpeg
-setuptools
-wheel
-requests
-certifi
-charset-normalizer
-idna
-urllib3
-websockets
-tqdm

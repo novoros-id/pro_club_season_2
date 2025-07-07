@@ -1,8 +1,0 @@
-
-basicsr 
-facexlib 
-gfpgan 
-torch 
-torchvision 
-pillow
-numpy
