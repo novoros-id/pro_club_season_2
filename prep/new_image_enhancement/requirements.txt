@@ -1,0 +1,2 @@
+huggingface_hub==0.23.0
+git+https://github.com/sberbank-ai/Real-ESRGAN.git
