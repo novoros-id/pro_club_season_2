@@ -40,7 +40,8 @@ class Transcription:
 
         self._last_transcription_result = {
             "full_text": full_text,
-            "segments": segments
+            "segments": segments,
+            "audio_path": audio_path
         }
         return self._last_transcription_result
 
@@ -60,6 +61,7 @@ class Transcription:
             raise ValueError("Нет результатов: сначала вызовите transcribe()")
 
         docs = []
+        audio_title = self._last_transcription_result["audio_path"]
         for seg in self._last_transcription_result["segments"]:
             docs.append(
                 Document(
@@ -67,8 +69,10 @@ class Transcription:
                     metadata={
                         "start": self.format_timestamp(seg["start"]),
                         "end": self.format_timestamp(seg["end"]),
-                        "segment_id": seg["id"]
-                    }
+                        "timestamp_range": f"{self.format_timestamp(seg['start'])} - {self.format_timestamp(seg['end'])}",
+                        "audio_title": audio_title
+                    },
+                    extra={"segment_id": seg["id"]}
                 )
             )
         return docs
