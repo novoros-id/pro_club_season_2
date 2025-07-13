@@ -58,15 +58,10 @@ class create_docx:
                 count = lower_text.count(search_text)
                 for _ in range(count):
                     #Добавляем в словарь с увеличением счетчика
-                    #time_screen[counter] = segment['start']
                     table_time_screen.append({"Number": counter, "Time": segment['start']})
                     counter += 1
 
-        # Вывод результата
-       #print(time_screen)
-
        class_text_to_paragraphs = text_to_paragraphs(full_text)
-       #paragraphs = class_text_to_paragraphs.get_text_to_paragraphs()
        paragraphs = class_text_to_paragraphs.get_text_to_paragraphs_array()
 
        count_time_scr = 0
@@ -79,10 +74,6 @@ class create_docx:
         if count_lower_text > 0:
             for _ in range(count_lower_text):
                 count_time_scr += 1  # Увеличиваем счетчик времени
-
-                # Проверяем, есть ли ключ в time_screen
-                #if count_time_scr in time_screen:
-                #    paragraphs_time_scr[par_count] = time_screen[count_time_scr]
                 paragraphs_time_scr[par_count] = table_time_screen[count_time_scr-1]["Time"]
 
        #print(paragraphs_time_scr)           
@@ -101,21 +92,6 @@ class create_docx:
                     formatted_time = f"{hours:02}:{minutes:02}:{seconds:02}"
                     frame_at_time = class_picture_description.save_frame_at_time(video_path, formatted_time)
                     doc.add_picture(frame_at_time, width=Mm(165))
-               
-           #if time_screen <> 0
-                 #if time_screen <> 0
-            #a=1
-               
-           
-
-       #paragraph_txt = '\n'.join(f"\t{paragraph}" for paragraph in paragraphs)
-       
-       # Добавляем текст в документ
-       #doc.add_paragraph(paragraph_txt)
-
-        # Если передан путь к изображению, добавляем его в документ
-       #if self.image_path and os.path.isfile(self.image_path):
-           #doc.add_picture(self.image_path, width=Mm(165))  # Указываем ширину изображения (можно изменить)
 
        # Формируем имя выходного файла
        docx_file_path = os.path.splitext(json_file_path)[0] + '.docx'
