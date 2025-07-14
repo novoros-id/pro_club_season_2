@@ -21,5 +21,5 @@ def process_video(video_path):
 
 # Пример использования:
 if __name__ == "__main__":
-    video_path = '/Users/alexeyvaganov/Documents/doc/Работа/КЛУБ РАЗРАБОТЧИКОВ/Просковья инструкция.mov'
+    video_path = 'Просковья инструкция_PV.mp4'
     process_video(video_path)

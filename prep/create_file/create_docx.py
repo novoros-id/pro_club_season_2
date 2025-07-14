@@ -73,8 +73,14 @@ class create_docx:
 
         if count_lower_text > 0:
             for _ in range(count_lower_text):
-                count_time_scr += 1  # Увеличиваем счетчик времени
-                paragraphs_time_scr[par_count] = table_time_screen[count_time_scr-1]["Time"]
+                 # Добавляем проверку на выход за пределы списка
+                if count_time_scr < len(table_time_screen):
+                    paragraphs_time_scr[par_count] = table_time_screen[count_time_scr]["Time"]
+                    count_time_scr += 1
+                else:
+                    # Если превысили длину списка, можно либо прервать цикл,
+                    # либо пропустить это значение
+                    break
 
        #print(paragraphs_time_scr)           
        video_path = self.video_path
