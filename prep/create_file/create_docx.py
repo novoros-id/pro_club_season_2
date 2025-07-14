@@ -52,6 +52,7 @@ class create_docx:
        for segment in data['segments']:
             # Приводим текст к нижнему регистру
             lower_text = segment['text'].lower()
+            # print(lower_text)
     
             # Проверяем вхождение текста
             if search_text in lower_text:
@@ -73,7 +74,12 @@ class create_docx:
 
         if count_lower_text > 0:
             for _ in range(count_lower_text):
-                 # Добавляем проверку на выход за пределы списка
+                # print(count_time_scr)
+                # num_elements = len(table_time_screen)
+                # print(f"Количество элементов в table_time_screen: {num_elements}")
+                # count_time_scr += 1  # Увеличиваем счетчик времени
+                # paragraphs_time_scr[par_count] = table_time_screen[count_time_scr-1]["Time"]
+                # Добавляем проверку на выход за пределы списка
                 if count_time_scr < len(table_time_screen):
                     paragraphs_time_scr[par_count] = table_time_screen[count_time_scr]["Time"]
                     count_time_scr += 1

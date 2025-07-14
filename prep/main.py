@@ -7,6 +7,7 @@ def process_video(video_path):
     prep = prepare_files(video_path)
     files = prep.process_file()
     audio_file = files['audio']  # Получаем путь к аудиофайлу
+    video_file = files['video']  # Получаем путь к аудиофайлу
     print(f"[LOG] prepare_files результат: {files}")
     
     # 2. Транскрибация аудиофайла
@@ -15,7 +16,7 @@ def process_video(video_path):
     print(f"[LOG] Transcription результат: {transcription_json}")
     
     # 3. Создание DOCX из транскрипта
-    class_create_docx = create_docx(transcription_json)
+    class_create_docx = create_docx(transcription_json, video_file)
     paragraph = class_create_docx.get_docx()
     print(f"[LOG] create_docx результат: {paragraph}")
 
