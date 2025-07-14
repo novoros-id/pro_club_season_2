@@ -1,46 +1,81 @@
-import os
-import json
-import whisper
-from langchain_core.documents import Document
+# pip install --upgrade "torch>=2.2" transformers accelerate
+import os, json, torch
+import whisper  # openai‑whisper
 from typing import List
-
+from langchain_core.documents import Document
 
 class Transcription:
     def __init__(self, model_name: str = "medium", language: str = "ru"):
-        self.model = whisper.load_model(model_name)
         self.language = language
+        self._hf_backend = "/" in model_name  # признак Hugging Face модели
 
-    # Преобразование секунд возвращаемых Whisper в человекочитаемый формат времени
+        if self._hf_backend:
+            print("_hf_backend")
+            # --- Hugging Face загрузка ---
+            from transformers import AutoModelForSpeechSeq2Seq, AutoProcessor, pipeline
+
+            dtype = torch.float16 if torch.cuda.is_available() else torch.float32
+            device = "cuda:0" if torch.cuda.is_available() else "cpu"
+
+            self.processor = AutoProcessor.from_pretrained(model_name)
+            model = AutoModelForSpeechSeq2Seq.from_pretrained(
+                model_name,
+                torch_dtype=dtype,
+                low_cpu_mem_usage=True,
+                use_safetensors=True,
+            ).to(device)
+
+            # `return_timestamps="word"` → получаем тайм‑коды каждого слова :contentReference[oaicite:1]{index=1}
+            self.pipe = pipeline(
+                "automatic-speech-recognition",
+                model=model,
+                tokenizer=self.processor.tokenizer,
+                feature_extractor=self.processor.feature_extractor,
+                return_timestamps="word",
+                chunk_length_s=30,
+                torch_dtype=dtype,
+                device=device,
+            )
+        else:
+            print("openai‑whisper")
+            # --- классический openai‑whisper ---
+            self.model = whisper.load_model(model_name)
+
+    # переиспользуем вашу функцию
     def format_timestamp(self, seconds: float) -> str:
-        milliseconds = int((seconds - int(seconds)) * 1000)
-        return f"{int(seconds // 3600):02d}:{int((seconds % 3600) // 60):02d}:{int(seconds % 60):02d}.{milliseconds:03d}"
+        ms = int((seconds - int(seconds)) * 1000)
+        return f"{int(seconds // 3600):02d}:{int((seconds % 3600)//60):02d}:{int(seconds%60):02d}.{ms:03d}"
 
-    # Транскрибирование аудио файла с использованием Whisper
     def transcribe(self, audio_path: str) -> dict:
-        result = self.model.transcribe(audio_path, language=self.language, word_timestamps=True)
+        if self._hf_backend:
+            out = self.pipe(audio_path, generate_kwargs={"language": self.language})
+            # формируем тот же самый словарь, что давал Whisper
+            segments = []
+            for i, ch in enumerate(out.get("chunks", [])):
+                segments.append({
+                    "id": i,
+                    "start": ch["timestamp"][0],
+                    "end":   ch["timestamp"][1],
+                    "text":  ch["text"].strip(),
+                    "words": [{
+                        "word":  ch["text"].strip(),
+                        "start": ch["timestamp"][0],
+                        "end":   ch["timestamp"][1],
+                    }],
+                })
+            result = {"text": out.get("text", "").strip(), "segments": segments}
+        else:
+            result = self.model.transcribe(
+                audio_path,
+                language=self.language,
+                word_timestamps=True,
+            )
+
+        # унифицируем под старое API
         full_text = result.get("text", "").strip()
-        segments = []
-
-        for i, seg in enumerate(result.get("segments", [])):
-            words = seg.get("words", [])
-            segments.append({
-                "id": i,
-                "start": seg.get("start", 0.0),
-                "end": seg.get("end", 0.0),
-                "text": seg.get("text", "").strip(),
-                "words": [
-                    {
-                        "word": word.get("word", "").strip(),
-                        "start": word.get("start", 0.0),
-                        "end": word.get("end", 0.0)
-                    }
-                    for word in words
-                ]
-            })
-
         self._last_transcription_result = {
             "full_text": full_text,
-            "segments": segments
+            "segments": result.get("segments", []),
         }
         return self._last_transcription_result
 

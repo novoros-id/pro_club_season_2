@@ -10,7 +10,7 @@ def process_video(video_path):
     print(f"[LOG] prepare_files результат: {files}")
     
     # 2. Транскрибация аудиофайла
-    transcription = Transcription()
+    transcription = Transcription(model_name="antony66/whisper-large-v3-russian")
     transcription_json = transcription.save_json(audio_file)
     print(f"[LOG] Transcription результат: {transcription_json}")
     
@@ -21,5 +21,5 @@ def process_video(video_path):
 
 # Пример использования:
 if __name__ == "__main__":
-    video_path = '/Users/alexeyvaganov/Documents/doc/Работа/КЛУБ РАЗРАБОТЧИКОВ/Инструкция по боту_720.mov'
+    video_path = '/Users/alexeyvaganov/Documents/doc/Работа/КЛУБ РАЗРАБОТЧИКОВ/Просковья инструкция.mov'
     process_video(video_path)
