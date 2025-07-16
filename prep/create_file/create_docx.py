@@ -44,22 +44,21 @@ class create_docx:
 
        # Счетчик для нумерации найденных вхождений
        counter = 1
-
-       # Текст для поиска
-       search_text = "сейчас на экране"
-
-       # Перебираем segments
+       
+       search_sequence = ["сейчас", "на", "экране"]
        for segment in data['segments']:
-            # Приводим текст к нижнему регистру
-            lower_text = segment['text'].lower()
-    
-            # Проверяем вхождение текста
-            if search_text in lower_text:
-                count = lower_text.count(search_text)
-                for _ in range(count):
-                    #Добавляем в словарь с увеличением счетчика
-                    table_time_screen.append({"Number": counter, "Time": segment['start']})
-                    counter += 1
+           words = segment.get('words', [])
+           lower_words = [word['word'].lower() for word in words]
+
+           for i in range(len(lower_words) - 2):
+               if lower_words[i:i+3] == search_sequence:
+                   start_time = words[i]['start']
+                   table_time_screen.append({
+                        "Number": counter,
+                        "Time": start_time
+                    })
+                   counter += 1
+                   break
 
        class_text_to_paragraphs = text_to_paragraphs(full_text)
        paragraphs = class_text_to_paragraphs.get_text_to_paragraphs_array()
