@@ -49,35 +49,82 @@ class Transcription:
     def transcribe(self, audio_path: str) -> dict:
         if self._hf_backend:
             out = self.pipe(audio_path, generate_kwargs={"language": self.language})
-            # формируем тот же самый словарь, что давал Whisper
-            segments = []
-            for i, ch in enumerate(out.get("chunks", [])):
-                segments.append({
-                    "id": i,
-                    "start": ch["timestamp"][0],
-                    "end":   ch["timestamp"][1],
-                    "text":  ch["text"].strip(),
-                    "words": [{
-                        "word":  ch["text"].strip(),
-                        "start": ch["timestamp"][0],
-                        "end":   ch["timestamp"][1],
-                    }],
-                })
-            result = {"text": out.get("text", "").strip(), "segments": segments}
+            chunks = out.get("chunks", [])
+            segments = self._group_chunks(chunks, max_gap=0.6)   # ← группируем
+            full_text = out.get("text", "").strip()
         else:
             result = self.model.transcribe(
                 audio_path,
                 language=self.language,
                 word_timestamps=True,
             )
+            segments = result.get("segments", [])
+            full_text = result.get("text", "").strip()
 
-        # унифицируем под старое API
-        full_text = result.get("text", "").strip()
         self._last_transcription_result = {
             "full_text": full_text,
-            "segments": result.get("segments", []),
+            "segments": segments,
         }
         return self._last_transcription_result
+
+
+    def _group_chunks(self, chunks, max_gap=0.6, max_words=20):
+        """Объединяем word‑chunks обратно во фразы.
+        • max_gap   – пауза (с) между словами, после которой начинаем новый сегмент
+        • max_words – «страховка» от слишком длинных сегментов
+        """
+        import re
+
+        def _flush(seg_words, seg_start, seg_end, segments):
+            if not seg_words:
+                return
+            # --- 1. safely strip leading spaces ---
+            clean_tokens = [w["text"].lstrip() for w in seg_words]       ### NEW
+            text = " ".join(clean_tokens)                                ### NEW
+
+            # --- 2. collapse multi‑spaces + fix punctuation ---
+            text = re.sub(r"\s{2,}", " ", text)          # двойные → одиночные
+            text = re.sub(r"\s+([.,!?;:%)\]])", r"\1", text)  # пробел перед знаками
+
+            segments.append({
+                "id": len(segments),
+                "start": seg_start,
+                "end":   seg_end,
+                "text":  text.strip(),
+                "words": [
+                    {
+                        "word":  w["text"].strip(),
+                        "start": w["timestamp"][0],
+                        "end":   w["timestamp"][1] or w["timestamp"][0],
+                    } for w in seg_words
+                ],
+            })
+
+
+        segments, seg_words = [], []
+        seg_start = prev_end = None
+
+        for ch in chunks:
+            st, ed = ch.get("timestamp", (None, None))
+            if st is None:                 # пропускаем «битый» чанκ
+                continue
+
+            # первый / новый сегмент
+            if seg_start is None:
+                seg_start = st
+                prev_end  = ed or st
+
+            gap = 0 if prev_end is None else st - prev_end
+            if (gap > max_gap and seg_words) or len(seg_words) >= max_words:
+                _flush(seg_words, seg_start, prev_end, segments)
+                seg_words, seg_start = [], st
+
+            seg_words.append(ch)
+            prev_end = ed or st      # если ed == None, берём st
+
+        _flush(seg_words, seg_start, prev_end, segments)
+        return segments
+
 
     # Сохранение результата транскрипции в формате JSON
     def save_json(self, audio_path: str) -> str:
