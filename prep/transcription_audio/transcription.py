@@ -48,7 +48,16 @@ class Transcription:
 
     def transcribe(self, audio_path: str) -> dict:
         if self._hf_backend:
-            out = self.pipe(audio_path, generate_kwargs={"language": self.language})
+            #out = self.pipe(audio_path, generate_kwargs={"language": self.language})
+            # Стало:
+            out = self.pipe(
+                audio_path,
+                generate_kwargs={
+                    "language": self.language,
+                    "return_timestamps": "word",
+                    "task": "transcribe"
+                }
+            )
             chunks = out.get("chunks", [])
             segments = self._group_chunks(chunks, max_gap=0.6)   # ← группируем
             full_text = out.get("text", "").strip()
@@ -65,6 +74,11 @@ class Transcription:
             "full_text": full_text,
             "segments": segments,
         }
+
+        # Освобождаем кэш GPU после транскрипции
+        if torch.cuda.is_available():
+            torch.cuda.empty_cache()
+
         return self._last_transcription_result
 
 
@@ -154,3 +168,16 @@ class Transcription:
                 )
             )
         return docs
+    
+    def unload(self):
+        """Полностью удаляет модель и освобождает GPU-память."""
+        if self._hf_backend:
+            del self.pipe
+            del self.model
+            del self.processor
+        else:
+            del self.model
+
+        if torch.cuda.is_available():
+            torch.cuda.empty_cache()
+        self._last_transcription_result = None
