@@ -39,34 +39,47 @@ class create_docx:
 
         # === Шаг 1: Поиск "сейчас на экране" в segments ===
         table_time_screen = []
-        counter = 1
-        search_text = "сейчас на экране"
 
-        for segment in data.get('segments', []):
-            lower_text = segment['text'].lower()
-            if search_text in lower_text:
-                count = lower_text.count(search_text)
-                for _ in range(count):
-                    table_time_screen.append({"Number": counter, "Time": segment['start']})
-                    counter += 1
+        # Счетчик для нумерации найденных вхождений
+        counter = 1
+       
+        search_sequence = ["сейчас", "на", "экране"]
+        for segment in data['segments']:
+           words = segment.get('words', [])
+           lower_words = [word['word'].lower() for word in words]
+
+           for i in range(len(lower_words) - 2):
+               if lower_words[i:i+3] == search_sequence:
+                   start_time = words[i]['start']
+                   table_time_screen.append({
+                        "Number": counter,
+                        "Time": start_time
+                    })
+                   counter += 1
+                   break
 
         # === Шаг 2: Разбиваем текст на абзацы ===
         class_text_to_paragraphs = text_to_paragraphs(full_text)
         paragraphs = class_text_to_paragraphs.get_text_to_paragraphs_array()
 
-        # === Шаг 3: Связываем абзацы с временными метками ===
-        paragraphs_time_scr = {}
         count_time_scr = 0
-
+        paragraphs_time_scr = {}
+        # Обход массива paragraphs
         for par_count, paragraph in enumerate(paragraphs, start=1):
-            lower_text = paragraph.lower()
-            count_occurrences = lower_text.count(search_text)
-            for _ in range(count_occurrences):
-                if count_time_scr < len(table_time_screen):
-                    paragraphs_time_scr[par_count] = table_time_screen[count_time_scr]["Time"]
-                    count_time_scr += 1
-                else:
-                    break  # Защита от переполнения
+            lower_text = paragraph.lower()  # Приводим текст к нижнему регистру
+            count_lower_text = lower_text.count("сейчас на экране")  # Считаем вхождения
+
+            if count_lower_text > 0:
+                for _ in range(count_lower_text):
+                    # print(count_time_scr)
+                    # Добавляем проверку на выход за пределы списка
+                    if count_time_scr < len(table_time_screen):
+                        paragraphs_time_scr[par_count] = table_time_screen[count_time_scr]["Time"]
+                        count_time_scr += 1
+                    else:
+                        # Если превысили длину списка, можно либо прервать цикл,
+                        # либо пропустить это значение
+                        break
 
         # === Шаг 4: Формируем документ ===
         video_path = self.video_path
@@ -125,9 +138,8 @@ class create_docx:
                     unique_path = f"temp_frame_{i}_{uuid.uuid4().hex[:8]}.jpg"
                     output_path = os.path.join(video_dir, unique_path)
                     shutil.copy(temp_frame, output_path)
-                    frame_paths.append(unique_path)
+                    frame_paths.append(output_path)
                     
-
                 # Определяем, после каких абзацев вставлять картинки
                 num_paragraphs = len(paragraphs)
                 image_positions = []
