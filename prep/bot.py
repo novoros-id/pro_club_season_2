@@ -5,6 +5,7 @@ import logging
 from telegram import Update
 from telegram.ext import ApplicationBuilder, CommandHandler, MessageHandler, ContextTypes, filters
 from main import process_video
+from config import USER_FOLDER
 
 # Логирование
 logging.basicConfig(
@@ -25,7 +26,7 @@ def generate_user_folder(user):
     username = user.username or user_id  # если нет username, используем ID
     unique_id = str(uuid.uuid4())[:8]  # короткий UUID для уникальности
     folder_name = f"{username}_{unique_id}"
-    folder_path = os.path.join("sessions", folder_name)
+    folder_path = os.path.join(USER_FOLDER, folder_name)
     os.makedirs(folder_path, exist_ok=True)
     return folder_path
 
@@ -51,9 +52,14 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
         # Передаём ссылку и папку в обработку
         docx_path = process_video(text, folder)
 
-        # Отправляем файл пользователю
+        # Извлекаем имя файла из полного пути
+        filename = os.path.basename(docx_path)
+        
         with open(docx_path, 'rb') as docx_file:
-            await update.message.reply_document(document=docx_file, filename="transcription.docx")
+            await update.message.reply_document(
+                document=docx_file,
+                filename=filename  # используем извлечённое имя файла
+            )
 
     except Exception as e:
         logging.error(f"Ошибка при обработке видео для пользователя {user.id}: {e}")
