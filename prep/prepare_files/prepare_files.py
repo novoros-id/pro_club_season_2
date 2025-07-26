@@ -46,6 +46,27 @@ class prepare_files:
         }
 
         if is_video:
+
+            try:
+                # Получаем длительность видео в секундах
+                duration_output = subprocess.check_output([
+                    "ffprobe", "-v", "error",
+                    "-show_entries", "format=duration",
+                    "-of", "default=nw=1:nokey=1",
+                    self.file_name
+                ]).decode('utf-8').strip()
+                duration = float(duration_output)
+                if duration > 1800:  # 30 минут = 1800 секунд
+                    raise ValueError(f"Видео длится {duration:.2f} секунд ({duration/60:.2f} минут). "
+                                    f"Максимально допустимая длительность — 20 минут.")
+            except subprocess.CalledProcessError:
+                raise RuntimeError("Не удалось определить длительность видео с помощью ffprobe.")
+            except ValueError as e:
+                if "could not convert" in str(e):
+                    raise RuntimeError("Некорректное значение длительности видео.")
+                else:
+                    raise
+
             # Обработка видео — конвертация + извлечение аудио
             video_output = os.path.join(dir_path, f"{file_name_only}_PV.mp4")
             audio_output = os.path.join(dir_path, f"{file_name_only}_PA.wav")
