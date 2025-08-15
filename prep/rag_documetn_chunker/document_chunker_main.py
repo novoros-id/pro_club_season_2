@@ -2,7 +2,7 @@ from document_chunker import DocumentChunker
 from prep.transcription_audio.transcription_main import transcription_main
 
 def main():
-    _, docs = transcription_main(return_docs=True)
+    json_path, docs = transcription_main(return_docs=True)
 
     if not docs:
         print("Не удалось получить документы для чанкинга.")
@@ -10,7 +10,6 @@ def main():
 
     print(f"Количество сегментов: {len(docs)}")
 
-    # Инициализация чанкера
     chunker = DocumentChunker(chunk_size=3, chunk_overlap=0.5)
     chunks = chunker.chunk(docs)
 
@@ -20,6 +19,7 @@ def main():
         print(chunk.page_content)
         print("Metadata:", chunk.metadata)
         print()
+
 
 if __name__ == "__main__":
     main()
