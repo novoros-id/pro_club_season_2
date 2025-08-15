@@ -42,10 +42,8 @@ def transcription_main(
         print(f"Metadata: {d.metadata}")
     return json_path, None
 
-
 def main():
     transcription_main(return_docs=False)
-
 
 if __name__ == "__main__":
     main()

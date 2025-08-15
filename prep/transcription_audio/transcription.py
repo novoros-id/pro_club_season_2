@@ -1,3 +1,4 @@
+
 import os
 import json
 import whisper
@@ -8,7 +9,18 @@ from typing import List, Dict, Any, Tuple
 class Transcription:
     def __init__(self, model_name: str = "medium", language: str = "ru", device: str | None = None):
         self.model = whisper.load_model(model_name, device=device) if device else whisper.load_model(model_name)
+
         self.language = language
+        self._hf_backend = "/" in model_name  # признак Hugging Face модели
+
+        if self._hf_backend:
+            print("_hf_backend")
+            # --- Hugging Face загрузка ---
+            from transformers import AutoModelForSpeechSeq2Seq, AutoProcessor, pipeline
+
+            dtype = torch.float16 if torch.cuda.is_available() else torch.float32
+            device = "cuda:0" if torch.cuda.is_available() else "cpu"
+
 
     # Преобразование секунд возвращаемых Whisper в человекочитаемый формат времени
     @staticmethod
@@ -59,9 +71,11 @@ class Transcription:
                 "end_timestamp": self._format_timestamp(seg_end),
                 "text": seg_text,
                 "words": seg_words
+
             })
         audio_file = os.path.abspath(audio_file)
         duration = float(json_segments[-1]["end"]) if json_segments else 0.0
+
 
         json_object: Dict[str, Any] = {
             "audio_file": audio_file,
@@ -69,6 +83,7 @@ class Transcription:
             "segments": json_segments,
             "words_total": words_total
         }
+
 
         if out_json_path is None:
             base, _ = os.path.splitext(audio_file)

@@ -4,6 +4,7 @@ from transformers import BlipProcessor, BlipForConditionalGeneration
 
 import cv2
 import requests
+import os
 
 class picture_description:
     def __init__(self):
@@ -60,7 +61,9 @@ class picture_description:
         ret, frame = cap.read()
 
         if ret:
-            output_image_path = 'screenshot.png'
+            # Получаем директорию из пути к видео
+            video_dir = os.path.dirname(video_path)
+            output_image_path = os.path.join(video_dir, 'screenshot.png')
             cv2.imwrite(output_image_path, frame)
             #print(f"Кадр сохранен как {output_image_path}")
             cap.release()
