@@ -1,15 +1,11 @@
-
-import os
-import json
-import whisper
+# pip install --upgrade "torch>=2.2" transformers accelerate
+import os, json, torch
+import whisper  # openai‑whisper
+from typing import List
 from langchain_core.documents import Document
-from typing import List, Dict, Any, Tuple
-
 
 class Transcription:
-    def __init__(self, model_name: str = "medium", language: str = "ru", device: str | None = None):
-        self.model = whisper.load_model(model_name, device=device) if device else whisper.load_model(model_name)
-
+    def __init__(self, model_name: str = "medium", language: str = "ru"):
         self.language = language
         self._hf_backend = "/" in model_name  # признак Hugging Face модели
 
@@ -21,101 +17,167 @@ class Transcription:
             dtype = torch.float16 if torch.cuda.is_available() else torch.float32
             device = "cuda:0" if torch.cuda.is_available() else "cpu"
 
+            self.processor = AutoProcessor.from_pretrained(model_name)
+            model = AutoModelForSpeechSeq2Seq.from_pretrained(
+                model_name,
+                torch_dtype=dtype,
+                low_cpu_mem_usage=True,
+                use_safetensors=True,
+            ).to(device)
 
-    # Преобразование секунд возвращаемых Whisper в человекочитаемый формат времени
-    @staticmethod
-    def _format_timestamp(seconds: float) -> str:
-        if seconds is None:
-            return "00:00:00"
-        milliseconds = int(round(seconds - int(seconds)) * 1000)
-        seconds = int(seconds) % 60
-        minutes = (int(seconds) // 60) % 60
-        hours = int(seconds // 3600)
-        return f"{hours:02d}:{minutes:02d}:{seconds:02d}.{milliseconds:03d}"
+            # `return_timestamps="word"` → получаем тайм‑коды каждого слова :contentReference[oaicite:1]{index=1}
+            self.pipe = pipeline(
+                "automatic-speech-recognition",
+                model=model,
+                tokenizer=self.processor.tokenizer,
+                feature_extractor=self.processor.feature_extractor,
+                return_timestamps="word",
+                chunk_length_s=30,
+                torch_dtype=dtype,
+                device=device,
+            )
+        else:
+            print("openai‑whisper")
+            # --- классический openai‑whisper ---
+            self.model = whisper.load_model(model_name)
 
-    # Транскрибирование аудио файла с использованием Whisper
-    def transcribe(self, audio_file: str, out_json_path: str | None = None) -> Tuple[str, Dict[str, Any]]:
-        result = self.model.transcribe(
-            audio_file, 
-            language=self.language,
-            verbose=False, 
-            word_timestamps=True,
-            condition_on_previous_text=False
-        )
+    # переиспользуем вашу функцию
+    def format_timestamp(self, seconds: float) -> str:
+        ms = int((seconds - int(seconds)) * 1000)
+        return f"{int(seconds // 3600):02d}:{int((seconds % 3600)//60):02d}:{int(seconds%60):02d}.{ms:03d}"
 
-        segments = result.get("segments", []) or []
-        words_total = 0
-        json_segments: List[Dict[str, Any]] = []
+    def transcribe(self, audio_path: str) -> dict:
+        if self._hf_backend:
+            #out = self.pipe(audio_path, generate_kwargs={"language": self.language})
+            # Стало:
+            out = self.pipe(
+                audio_path,
+                generate_kwargs={
+                    "language": self.language,
+                    "return_timestamps": "word",
+                    "task": "transcribe"
+                }
+            )
+            chunks = out.get("chunks", [])
+            segments = self._group_chunks(chunks, max_gap=0.6)   # ← группируем
+            full_text = out.get("text", "").strip()
+        else:
+            result = self.model.transcribe(
+                audio_path,
+                language=self.language,
+                word_timestamps=True,
+            )
+            segments = result.get("segments", [])
+            full_text = result.get("text", "").strip()
 
-        for i, seg in enumerate(segments):
-            seg_start = float(seg.get("start", 0.0))
-            seg_end = float(seg.get("end", 0.0))
-            seg_text = seg.get("text", "").strip()
-
-            seg_words = []
-            for w in (seg.get("words") or []):
-                word_start = float(w.get("start", 0.0))
-                word_end = float(w.get("end", 0.0))
-                seg_words.append({
-                    "word": w.get("word", "").strip(),
-                    "start": word_start,
-                    "end": word_end
-                })
-                words_total += len(seg_words)
-
-            json_segments.append({
-                "id": i,
-                "start": seg_start,
-                "end": seg_end,
-                "start_timestamp": self._format_timestamp(seg_start),
-                "end_timestamp": self._format_timestamp(seg_end),
-                "text": seg_text,
-                "words": seg_words
-
-            })
-        audio_file = os.path.abspath(audio_file)
-        duration = float(json_segments[-1]["end"]) if json_segments else 0.0
-
-
-        json_object: Dict[str, Any] = {
-            "audio_file": audio_file,
-            "duration": duration,
-            "segments": json_segments,
-            "words_total": words_total
+        self._last_transcription_result = {
+            "full_text": full_text,
+            "segments": segments,
         }
 
+        # Освобождаем кэш GPU после транскрипции
+        if torch.cuda.is_available():
+            torch.cuda.empty_cache()
 
-        if out_json_path is None:
-            base, _ = os.path.splitext(audio_file)
-            out_json_path = f"{base}.json"
+        return self._last_transcription_result
 
-        with open(out_json_path, "w", encoding="utf-8") as f:
-            json.dump(json_object, f, ensure_ascii=False, indent=2)
 
-        return out_json_path, json_object
+    def _group_chunks(self, chunks, max_gap=0.6, max_words=20):
+        """Объединяем word‑chunks обратно во фразы.
+        • max_gap   – пауза (с) между словами, после которой начинаем новый сегмент
+        • max_words – «страховка» от слишком длинных сегментов
+        """
+        import re
+
+        def _flush(seg_words, seg_start, seg_end, segments):
+            if not seg_words:
+                return
+            # --- 1. safely strip leading spaces ---
+            clean_tokens = [w["text"].lstrip() for w in seg_words]       ### NEW
+            text = " ".join(clean_tokens)                                ### NEW
+
+            # --- 2. collapse multi‑spaces + fix punctuation ---
+            text = re.sub(r"\s{2,}", " ", text)          # двойные → одиночные
+            text = re.sub(r"\s+([.,!?;:%)\]])", r"\1", text)  # пробел перед знаками
+
+            segments.append({
+                "id": len(segments),
+                "start": seg_start,
+                "end":   seg_end,
+                "text":  text.strip(),
+                "words": [
+                    {
+                        "word":  w["text"].strip(),
+                        "start": w["timestamp"][0],
+                        "end":   w["timestamp"][1] or w["timestamp"][0],
+                    } for w in seg_words
+                ],
+            })
+
+
+        segments, seg_words = [], []
+        seg_start = prev_end = None
+
+        for ch in chunks:
+            st, ed = ch.get("timestamp", (None, None))
+            if st is None:                 # пропускаем «битый» чанκ
+                continue
+
+            # первый / новый сегмент
+            if seg_start is None:
+                seg_start = st
+                prev_end  = ed or st
+
+            gap = 0 if prev_end is None else st - prev_end
+            if (gap > max_gap and seg_words) or len(seg_words) >= max_words:
+                _flush(seg_words, seg_start, prev_end, segments)
+                seg_words, seg_start = [], st
+
+            seg_words.append(ch)
+            prev_end = ed or st      # если ed == None, берём st
+
+        _flush(seg_words, seg_start, prev_end, segments)
+        return segments
+
+
+    # Сохранение результата транскрипции в формате JSON
+    def save_json(self, audio_path: str) -> str:
+        result = self.transcribe(audio_path)
+        if result:
+            json_path = os.path.splitext(audio_path)[0] + ".json"
+            with open(json_path, "w", encoding="utf-8") as f:
+                json.dump(result, f, ensure_ascii=False, indent=2)
+            return json_path
+        return None
     
-    # Преобразование результата транскрипции в формат LangChain Document
-    @staticmethod
-    def json_to_documents(json_obj: Dict[str, Any]) -> List[Document]:
-        docs: List[Document] = []
-        audio_title = json_obj.get("audio_file", "")
-        for seg in json_obj.get("segments", []):
-            start = seg.get("start", 0.0)
-            end = seg.get("end", 0.0)
-            page = seg["text"]
+    # Получение результата транскрипции в виде словаря для llm
+    def as_documents(self) -> List[Document]:
+        if not self._last_transcription_result:
+            raise ValueError("Нет результатов: сначала вызовите transcribe()")
 
-            metadata = {
-                "audio_title": audio_title,
-                "start": start,
-                "end": end,
-                "timestamp_range": f"{seg['start_timestamp']} - {seg['end_timestamp']}",
-                "segment_index": seg["id"]
-            }
-            docs.append(Document(page_content=page, metadata=metadata))
-
+        docs = []
+        for seg in self._last_transcription_result["segments"]:
+            docs.append(
+                Document(
+                    page_content=seg["text"],
+                    metadata={
+                        "start": self.format_timestamp(seg["start"]),
+                        "end": self.format_timestamp(seg["end"]),
+                        "segment_id": seg["id"]
+                    }
+                )
+            )
         return docs
+    
+    def unload(self):
+        """Полностью удаляет модель и освобождает GPU-память."""
+        if self._hf_backend:
+            del self.pipe
+            del self.model
+            del self.processor
+        else:
+            del self.model
 
-    def transcribe_to_documents(self, audio_file: str, out_json_path: str | None = None) -> Tuple[str, List[Document]]:
-        json_path, json_obj = self.transcribe(audio_file, out_json_path)
-        docs = self.json_to_documents(json_obj)
-        return json_path, docs
+        if torch.cuda.is_available():
+            torch.cuda.empty_cache()
+        self._last_transcription_result = None

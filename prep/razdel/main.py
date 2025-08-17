@@ -1,9 +1,9 @@
 from langchain_ollama import OllamaLLM
 import base64
 from docx import Document
-URL_LLM="http://188.225.36.45"
-USER_LLM="ollamaadmin"
-PASSWORD_LLM="@TLYInb%5T#c"
+URL_LLM=""
+USER_LLM=""
+PASSWORD_LLM=""
 
 def extract_text_from_docx(file_path):
     """Извлекает только текст из .docx файла (игнорируя изображения)."""
