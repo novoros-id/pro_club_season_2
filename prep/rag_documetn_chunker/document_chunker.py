@@ -1,4 +1,4 @@
-import math
+import math, json
 from typing import List, Dict, DefaultDict
 from collections import defaultdict
 from langchain_core.documents import Document
@@ -56,13 +56,14 @@ class DocumentChunker:
 
                 start_s = float(chunk_docs[0].metadata["start"])
                 end_s = float(chunk_docs[-1].metadata["end"])
+                indeces = [int(d.metadata.get("segment_index", -1)) for d in chunk_docs]
 
                 metadata = {
                     "audio_title": Path(str(audio_title)).name,
                     "start": start_s,
                     "end": end_s,
                     "timestamp_range": f"{self._fmt_ts(start_s)} - {self._fmt_ts(end_s)}",
-                    "segment_indices": [int(d.metadata.get("segment_index", -1)) for d in chunk_docs],
+                    "segment_indices": json.dumps(indeces, ensure_ascii=False),
                     "segments_in_chunk": len(chunk_docs),
                 }
 

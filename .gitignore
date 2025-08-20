@@ -178,3 +178,7 @@ cython_debug/
 
 # PyPI configuration file
 .pypirc
+
+# Ignore test samples
+test_file/data/sample.json
+test_file/data/sample.wav

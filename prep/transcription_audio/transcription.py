@@ -1,7 +1,7 @@
 # pip install --upgrade "torch>=2.2" transformers accelerate
 import os, json, torch
 import whisper  # openai‑whisper
-from typing import List
+from typing import List, Tuple
 from langchain_core.documents import Document
 
 class Transcription:
@@ -73,6 +73,7 @@ class Transcription:
         self._last_transcription_result = {
             "full_text": full_text,
             "segments": segments,
+            "audio_file": audio_path,
         }
 
         # Освобождаем кэш GPU после транскрипции
@@ -155,19 +156,29 @@ class Transcription:
         if not self._last_transcription_result:
             raise ValueError("Нет результатов: сначала вызовите transcribe()")
 
-        docs = []
+        docs: List[Document] = []
+        audio_path = self._last_transcription_result.get("audio_file", "")
+        audio_title = os.path.basename(audio_path) if audio_path else ""
         for seg in self._last_transcription_result["segments"]:
+            start = float(seg["start"])
+            stop = float(seg["end"])
             docs.append(
                 Document(
                     page_content=seg["text"],
                     metadata={
-                        "start": self.format_timestamp(seg["start"]),
-                        "end": self.format_timestamp(seg["end"]),
-                        "segment_id": seg["id"]
+                        "audio_title": audio_title,
+                        "start": start,
+                        "end": stop,
+                        "segment_index": seg["id"],
+                        "timestamp_range": f"{self.format_timestamp(start)} - {self.format_timestamp(stop)}"
                     }
                 )
             )
         return docs
+    
+    def transcribe_to_documents(self, audio_file: str, out_json_path: str | None = None) -> Tuple[str, List[Document]]:
+        json_path, docs = self.save_json(audio_file), self.as_documents()
+        return json_path, docs
     
     def unload(self):
         """Полностью удаляет модель и освобождает GPU-память."""
