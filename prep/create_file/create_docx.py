@@ -116,7 +116,7 @@ def get_sections_from_llm(paragraphs, max_paragraphs_per_chunk=20):
                     if start < chunk_start + 1 or end > chunk_start + len(chunk):
                         continue
 
-                    # Ищем название раздела (5 строк выше)
+                    # Ищем название раздела (5 строк выше) // в коде поменял на 1, почему на 5??? Василишин
                     title = "Раздел"
                     for i in range(max(0, lines.index(line) - 1), lines.index(line)):
                         if "Название раздела" in lines[i]:
