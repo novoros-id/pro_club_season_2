@@ -116,7 +116,7 @@ def get_sections_from_llm(paragraphs, max_paragraphs_per_chunk=20):
                     if start < chunk_start + 1 or end > chunk_start + len(chunk):
                         continue
 
-                    # Ищем название раздела (5 строк выше) // в коде поменял на 1, почему на 5??? Василишин
+                    # Ищем название раздела (5 строк выше) // в коде поменял на 1, почему на 5??? в итоге массив с пропусками (не все параграфы) Василишин
                     title = "Раздел"
                     for i in range(max(0, lines.index(line) - 1), lines.index(line)):
                         if "Название раздела" in lines[i]:
@@ -136,7 +136,7 @@ def get_sections_from_llm(paragraphs, max_paragraphs_per_chunk=20):
 
     # === Сортируем разделы по стартовому абзацу ===
     sections.sort(key=lambda x: x['start_par'])
-    return sections
+    return sections #код ниже "портит" корректный массив. Василишин
     # === Опционально: объединяем пересекающиеся разделы (на всякий случай)
     #merged = []
     #for section in sorted(sections, key=lambda x: x['start_par']):
