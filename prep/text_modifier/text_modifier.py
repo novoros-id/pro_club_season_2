@@ -6,7 +6,7 @@ from langchain import PromptTemplate
 from langchain.schema import HumanMessage
 
 class TextModify:
-    def __init__(self, model_name="gemma3:27b", temperature="0.1"):
+    def __init__(self, model_name="gpt-oss:latest", temperature="0.1"):
         self.llm = OllamaLLM(
             model=model_name,
             callback_manager=CallbackManager([StreamingStdOutCallbackHandler()]),
@@ -24,6 +24,8 @@ class TextModify:
         6. Не сокращай и не обобщай — каждая мысль должна остаться, но быть выражена правильно и красиво.
         7. Верни только улучшенный текст, без пояснений, заголовков или комментариев.
         8. Предложения где есть фраза "сейчас на экране" изменять можно, но сама фраза "сейчас на экране" должна в остаться в предложении.
+        9. Нельзя добавлять фразы "сейчас на экране"
+        10. Не возвращай в тексте свои рассуждения, только итоговый текст
         """
 
     def improve_text(self, full_text):
