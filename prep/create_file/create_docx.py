@@ -118,7 +118,7 @@ def get_sections_from_llm(paragraphs, max_paragraphs_per_chunk=20):
 
                     # Ищем название раздела (5 строк выше)
                     title = "Раздел"
-                    for i in range(max(0, lines.index(line) - 5), lines.index(line)):
+                    for i in range(max(0, lines.index(line) - 1), lines.index(line)):
                         if "Название раздела" in lines[i]:
                             title_match = re.search(r":\s*(.+)", lines[i])
                             if title_match:
@@ -136,22 +136,22 @@ def get_sections_from_llm(paragraphs, max_paragraphs_per_chunk=20):
 
     # === Сортируем разделы по стартовому абзацу ===
     sections.sort(key=lambda x: x['start_par'])
-
+    return sections
     # === Опционально: объединяем пересекающиеся разделы (на всякий случай)
-    merged = []
-    for section in sorted(sections, key=lambda x: x['start_par']):
-        if not merged:
-            merged.append(section)
-        else:
-            last = merged[-1]
-            if section['start_par'] <= last['end_par'] + 1:
-                # Пересекаются или идут подряд — объединяем?
-                # Или просто пропускаем? Пока пропускаем, чтобы не портить структуру
-                continue
-            else:
-                merged.append(section)
-
-    return merged
+    #merged = []
+    #for section in sorted(sections, key=lambda x: x['start_par']):
+    #    if not merged:
+    #        merged.append(section)
+    #    else:
+    #        last = merged[-1]
+    #        if section['start_par'] <= last['end_par'] + 1:
+    #            # Пересекаются или идут подряд — объединяем?
+    #            # Или просто пропускаем? Пока пропускаем, чтобы не портить структуру
+    #            continue
+    #        else:
+    #            merged.append(section)
+    #
+    #return merged
 
 
 class create_docx:
