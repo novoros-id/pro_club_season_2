@@ -14,6 +14,7 @@ sys.path.insert(0, parent_dir)
 # Импорты из соседних модулей
 from text_to_paragraphs.text_to_paragraphs import text_to_paragraphs
 from picture_description.picture_description import picture_description
+from text_modifier.text_modifier import TextModify
 
 
 class create_docx:
@@ -36,6 +37,9 @@ class create_docx:
             data = json.load(file)
 
         full_text = data.get('full_text', '')
+
+        #text_modifier = TextModify()
+        #full_text = text_modifier.improve_text(full_text)
 
         # === Шаг 1: Поиск "сейчас на экране" в segments ===
         table_time_screen = []
@@ -61,6 +65,11 @@ class create_docx:
         # === Шаг 2: Разбиваем текст на абзацы ===
         class_text_to_paragraphs = text_to_paragraphs(full_text)
         paragraphs = class_text_to_paragraphs.get_text_to_paragraphs_array()
+
+        text_modifier = TextModify()
+
+        for i in range(len(paragraphs)):
+            paragraphs[i] = text_modifier.improve_text(paragraphs[i])
 
         count_time_scr = 0
         paragraphs_time_scr = {}
