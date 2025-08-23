@@ -18,6 +18,7 @@ sys.path.insert(0, parent_dir)
 # Импорты из соседних модулей
 from text_to_paragraphs.text_to_paragraphs import text_to_paragraphs
 from picture_description.picture_description import picture_description
+from text_modifier.text_modifier import TextModify
 
 # === LLM для разбиения на разделы ===
 from langchain_ollama import OllamaLLM
@@ -155,12 +156,14 @@ def get_sections_from_llm(paragraphs, max_paragraphs_per_chunk=20):
 
 
 class create_docx:
-    def __init__(self, json_file_path, video_path=""):
+    def __init__(self, json_file_path, video_path="", UseTextModify=False):
         self.json_file_path = json_file_path
         self.video_path = video_path
+        self.UseTextModify = UseTextModify
 
     def get_docx(self):
         json_file_path = self.json_file_path
+        UseTextModify = self.UseTextModify
 
         if not os.path.isfile(json_file_path):
             raise FileNotFoundError(f"Файл {json_file_path} не найден.")
@@ -191,6 +194,12 @@ class create_docx:
         # === Шаг 2: Разбиваем текст на абзацы ===
         class_text_to_paragraphs = text_to_paragraphs(full_text)
         paragraphs = class_text_to_paragraphs.get_text_to_paragraphs_array()
+
+        if UseTextModify==True:
+            text_modifier = TextModify()
+            for i in range(len(paragraphs)):
+                paragraphs[i] = text_modifier.improve_text(paragraphs[i])
+            
 
         # === Шаг 3: LLM разбивает на разделы (сохраняем оригинальные абзацы) ===
         print("Отправляем текст в LLM для разбиения на разделы...")
