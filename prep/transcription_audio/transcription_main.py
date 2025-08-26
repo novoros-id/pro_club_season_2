@@ -1,14 +1,14 @@
 import os
 from typing import Tuple, List
-from transcription import Transcription
+from prep.transcription_audio.transcription import Transcription
 from langchain_core.documents import Document
 
 
 # TODO: заменить на передачу из класса PrepareAudioVideo
 # Здесь должен быть путь к .wav файлу, подготовленному предыдущим шагом пайплайна
 def transcription_main(
-    return_docs: bool = False,
-    audio_file: str = "PA_45.wav",
+    return_docs: bool = True,
+    audio_file: str = "/Users/dmitriy.grishaev/Documents/Разработка/files/Аудио файлы/test_voice.wav",
     model_name: str = "medium",
     language: str = "ru",
     out_dir: str | None = None
@@ -26,10 +26,10 @@ def transcription_main(
         return None, None
 
     base_name = os.path.splitext(os.path.basename(audio_file))[0]
-    out_json = (os.path.join(out_dir, base_name + ".whisper.json") if out_dir else None)
+    out_json_path = (os.path.join(out_dir, base_name + ".whisper.json") if out_dir else None)
 
     transcriber = Transcription(model_name=model_name, language=language)
-    json_path, docs = transcriber.transcribe_to_docs(audio_file, out_json)
+    json_path, docs = transcriber.transcribe_to_documents(audio_file, out_json_path)
 
     if return_docs:
         return json_path, docs
