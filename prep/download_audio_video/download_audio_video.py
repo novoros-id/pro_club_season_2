@@ -15,8 +15,9 @@ def download_file(url, path):
 
 
 class SynologyDownloader:
-    def __init__(self, video_page_url: str):
+    def __init__(self, video_page_url: str, output_dir: str):
         self.video_page_url = video_page_url
+        self.output_dir = output_dir
 
     def download(self) -> str:
         video_url_holder = {"url": None}
@@ -101,6 +102,7 @@ class SynologyDownloader:
             if not filename.lower().endswith(ext):
                 filename += ext
 
+
             output_path = os.path.join(OUTPUT_DIR, filename)
             download_file(video_url, output_path)
             browser.close()
@@ -108,8 +110,9 @@ class SynologyDownloader:
 
 
 class YandexDownloader:
-    def __init__(self, public_url: str):
+    def __init__(self, public_url: str, output_dir: str):
         self.public_url = public_url
+        self.output_dir = output_dir
 
     def _get_filename_from_api(self) -> str:
         api_info_url = f"https://cloud-api.yandex.net/v1/disk/public/resources?public_key={self.public_url}"
@@ -136,7 +139,7 @@ class YandexDownloader:
         if response.status_code == 200:
             download_url = response.json()["href"]
             filename = self._get_filename_from_api()
-            output_path = os.path.join(OUTPUT_DIR, filename)
+            output_path = os.path.join(self.output_dir, filename)
             print(f"⬇️ Скачивание файла: {filename}...")
             self._download_file(download_url, output_path)
             print(f"✅ Сохранено: {output_path}")

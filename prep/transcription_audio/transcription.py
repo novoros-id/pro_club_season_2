@@ -1,48 +1,144 @@
-import os
-import json
-import whisper
-from langchain_core.documents import Document
+# pip install --upgrade "torch>=2.2" transformers accelerate
+import os, json, torch
+import whisper  # openai‑whisper
 from typing import List
-
+from langchain_core.documents import Document
 
 class Transcription:
     def __init__(self, model_name: str = "medium", language: str = "ru"):
-        self.model = whisper.load_model(model_name)
         self.language = language
+        self._hf_backend = "/" in model_name  # признак Hugging Face модели
 
-    # Преобразование секунд возвращаемых Whisper в человекочитаемый формат времени
+        if self._hf_backend:
+            print("_hf_backend")
+            # --- Hugging Face загрузка ---
+            from transformers import AutoModelForSpeechSeq2Seq, AutoProcessor, pipeline
+
+            dtype = torch.float16 if torch.cuda.is_available() else torch.float32
+            device = "cuda:0" if torch.cuda.is_available() else "cpu"
+
+            self.processor = AutoProcessor.from_pretrained(model_name)
+            model = AutoModelForSpeechSeq2Seq.from_pretrained(
+                model_name,
+                torch_dtype=dtype,
+                low_cpu_mem_usage=True,
+                use_safetensors=True,
+            ).to(device)
+
+            # `return_timestamps="word"` → получаем тайм‑коды каждого слова :contentReference[oaicite:1]{index=1}
+            self.pipe = pipeline(
+                "automatic-speech-recognition",
+                model=model,
+                tokenizer=self.processor.tokenizer,
+                feature_extractor=self.processor.feature_extractor,
+                return_timestamps="word",
+                chunk_length_s=30,
+                torch_dtype=dtype,
+                device=device,
+            )
+        else:
+            print("openai‑whisper")
+            # --- классический openai‑whisper ---
+            self.model = whisper.load_model(model_name)
+
+    # переиспользуем вашу функцию
     def format_timestamp(self, seconds: float) -> str:
-        milliseconds = int((seconds - int(seconds)) * 1000)
-        return f"{int(seconds // 3600):02d}:{int((seconds % 3600) // 60):02d}:{int(seconds % 60):02d}.{milliseconds:03d}"
+        ms = int((seconds - int(seconds)) * 1000)
+        return f"{int(seconds // 3600):02d}:{int((seconds % 3600)//60):02d}:{int(seconds%60):02d}.{ms:03d}"
 
-    # Транскрибирование аудио файла с использованием Whisper
     def transcribe(self, audio_path: str) -> dict:
-        result = self.model.transcribe(audio_path, language=self.language, word_timestamps=True)
-        full_text = result.get("text", "").strip()
-        segments = []
-
-        for i, seg in enumerate(result.get("segments", [])):
-            words = seg.get("words", [])
-            segments.append({
-                "id": i,
-                "start": seg.get("start", 0.0),
-                "end": seg.get("end", 0.0),
-                "text": seg.get("text", "").strip(),
-                "words": [
-                    {
-                        "word": word.get("word", "").strip(),
-                        "start": word.get("start", 0.0),
-                        "end": word.get("end", 0.0)
-                    }
-                    for word in words
-                ]
-            })
+        if self._hf_backend:
+            #out = self.pipe(audio_path, generate_kwargs={"language": self.language})
+            # Стало:
+            out = self.pipe(
+                audio_path,
+                generate_kwargs={
+                    "language": self.language,
+                    "return_timestamps": "word",
+                    "task": "transcribe"
+                }
+            )
+            chunks = out.get("chunks", [])
+            segments = self._group_chunks(chunks, max_gap=0.6)   # ← группируем
+            full_text = out.get("text", "").strip()
+        else:
+            result = self.model.transcribe(
+                audio_path,
+                language=self.language,
+                word_timestamps=True,
+            )
+            segments = result.get("segments", [])
+            full_text = result.get("text", "").strip()
 
         self._last_transcription_result = {
             "full_text": full_text,
-            "segments": segments
+            "segments": segments,
         }
+
+        # Освобождаем кэш GPU после транскрипции
+        if torch.cuda.is_available():
+            torch.cuda.empty_cache()
+
         return self._last_transcription_result
+
+
+    def _group_chunks(self, chunks, max_gap=0.6, max_words=20):
+        """Объединяем word‑chunks обратно во фразы.
+        • max_gap   – пауза (с) между словами, после которой начинаем новый сегмент
+        • max_words – «страховка» от слишком длинных сегментов
+        """
+        import re
+
+        def _flush(seg_words, seg_start, seg_end, segments):
+            if not seg_words:
+                return
+            # --- 1. safely strip leading spaces ---
+            clean_tokens = [w["text"].lstrip() for w in seg_words]       ### NEW
+            text = " ".join(clean_tokens)                                ### NEW
+
+            # --- 2. collapse multi‑spaces + fix punctuation ---
+            text = re.sub(r"\s{2,}", " ", text)          # двойные → одиночные
+            text = re.sub(r"\s+([.,!?;:%)\]])", r"\1", text)  # пробел перед знаками
+
+            segments.append({
+                "id": len(segments),
+                "start": seg_start,
+                "end":   seg_end,
+                "text":  text.strip(),
+                "words": [
+                    {
+                        "word":  w["text"].strip(),
+                        "start": w["timestamp"][0],
+                        "end":   w["timestamp"][1] or w["timestamp"][0],
+                    } for w in seg_words
+                ],
+            })
+
+
+        segments, seg_words = [], []
+        seg_start = prev_end = None
+
+        for ch in chunks:
+            st, ed = ch.get("timestamp", (None, None))
+            if st is None:                 # пропускаем «битый» чанκ
+                continue
+
+            # первый / новый сегмент
+            if seg_start is None:
+                seg_start = st
+                prev_end  = ed or st
+
+            gap = 0 if prev_end is None else st - prev_end
+            if (gap > max_gap and seg_words) or len(seg_words) >= max_words:
+                _flush(seg_words, seg_start, prev_end, segments)
+                seg_words, seg_start = [], st
+
+            seg_words.append(ch)
+            prev_end = ed or st      # если ed == None, берём st
+
+        _flush(seg_words, seg_start, prev_end, segments)
+        return segments
+
 
     # Сохранение результата транскрипции в формате JSON
     def save_json(self, audio_path: str) -> str:
@@ -72,3 +168,16 @@ class Transcription:
                 )
             )
         return docs
+    
+    def unload(self):
+        """Полностью удаляет модель и освобождает GPU-память."""
+        if self._hf_backend:
+            del self.pipe
+            del self.model
+            del self.processor
+        else:
+            del self.model
+
+        if torch.cuda.is_available():
+            torch.cuda.empty_cache()
+        self._last_transcription_result = None
