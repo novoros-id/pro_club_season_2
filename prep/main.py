@@ -1,5 +1,8 @@
 from prepare_files.prepare_files import prepare_files
-from transcription_audio.transcription import Transcription
+# from transcription_audio.transcription import Transcription
+from transcription_audio.transcription_main import transcription_main
+from rag_documetn_chunker.document_chunker_main import run_chunker
+from rag_db.rag_index_to_chroma_db_main import run_index
 from create_file.create_docx import create_docx
 from download_audio_video.download_audio_video import SynologyDownloader, YandexDownloader
 
@@ -18,16 +21,25 @@ def process_video(url, folder):
     print(f"[LOG] prepare_files результат: {files}")
     
     # 2. Транскрибация аудиофайла
-    transcription = Transcription(model_name="antony66/whisper-large-v3-russian")
-    transcription_json = transcription.save_json(audio_file)
+    # transcription = Transcription(model_name="antony66/whisper-large-v3-russian")
+    # transcription_json = transcription.save_json(audio_file)
+    # print(f"[LOG] Transcription результат: {transcription_json}")
+    # #transcription.unload()
+    transcription_json, docs = transcription_main(return_docs=True, audio_file=audio_file)
     print(f"[LOG] Transcription результат: {transcription_json}")
-    #transcription.unload()
 
-    
     # 3. Создание DOCX из транскрипта
     class_create_docx = create_docx(transcription_json, video_file)
     paragraph = class_create_docx.get_docx()
     print(f"[LOG] create_docx результат: {paragraph}")
+
+    # 4. Чанкинг
+    chunks = run_chunker(docs=docs)
+
+    # 5. Индексация в базу ChromaDB
+    manifest = run_index(docs=chunks)
+    print(f"[LOG] Индексация завершения: {manifest}")
+
     return paragraph 
 
 # Пример использования:
