@@ -1,7 +1,7 @@
 # pip install --upgrade "torch>=2.2" transformers accelerate
 import os, json, torch
 import whisper  # openai‑whisper
-from typing import List, Tuple
+from typing import List, Tuple, Optional
 from langchain_core.documents import Document
 
 class Transcription:
@@ -142,14 +142,18 @@ class Transcription:
 
 
     # Сохранение результата транскрипции в формате JSON
-    def save_json(self, audio_path: str) -> str:
+    def save_json(self, audio_path: str, out_json_path: Optional[str] = None) -> str:
         result = self.transcribe(audio_path)
-        if result:
+        if not result:
+            return None
+        if out_json_path:
+            os.makedirs(os.path.dirname(out_json_path) or ".", exist_ok=True)
+            json_path = out_json_path
+        else:
             json_path = os.path.splitext(audio_path)[0] + ".json"
-            with open(json_path, "w", encoding="utf-8") as f:
-                json.dump(result, f, ensure_ascii=False, indent=2)
-            return json_path
-        return None
+        with open(json_path, "w", encoding="utf-8") as f:
+            json.dump(result, f, ensure_ascii=False, indent=2)
+        return json_path
     
     # Получение результата транскрипции в виде словаря для llm
     def as_documents(self) -> List[Document]:
@@ -177,7 +181,8 @@ class Transcription:
         return docs
     
     def transcribe_to_documents(self, audio_file: str, out_json_path: str | None = None) -> Tuple[str, List[Document]]:
-        json_path, docs = self.save_json(audio_file), self.as_documents()
+        json_path = self.save_json(audio_file, out_json_path)
+        docs = self.as_documents()
         return json_path, docs
     
     def unload(self):
