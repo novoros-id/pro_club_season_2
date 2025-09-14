@@ -50,23 +50,39 @@ class Transcription:
         if self._hf_backend:
             #out = self.pipe(audio_path, generate_kwargs={"language": self.language})
             # Стало:
-            out = self.pipe(
-                audio_path,
-                generate_kwargs={
-                    "language": self.language,
-                    "return_timestamps": "word",
-                    "task": "transcribe"
-                }
-            )
+            try:
+                print(f"[LOG] Начал транскрибацию")
+                out = self.pipe(
+                    audio_path,
+                    generate_kwargs={
+                        "language": self.language,
+                        "return_timestamps": "word",
+                        "task": "transcribe"
+                    }
+                )
+                print(f"[LOG] Успешно завершил pipe, начало обработки чанков")
+            except Exception as e:
+                print(f"[ERROR] Ошибка в self.pipe: {type(e).__name__}: {e}")
+                import traceback
+                traceback.print_exc()
+                raise
             chunks = out.get("chunks", [])
             segments = self._group_chunks(chunks, max_gap=0.6)   # ← группируем
             full_text = out.get("text", "").strip()
         else:
-            result = self.model.transcribe(
-                audio_path,
-                language=self.language,
-                word_timestamps=True,
-            )
+            try:
+                print(f"[LOG] Начал транскрибацию")
+                result = self.model.transcribe(
+                    audio_path,
+                    language=self.language,
+                    word_timestamps=True,
+                )
+            except Exception as e:
+                print(f"[ERROR] Ошибка в self.pipe: {type(e).__name__}: {e}")
+                import traceback
+                traceback.print_exc()
+                raise
+            print(f"[LOG] Успешно завершил pipe, начало обработки чанков")
             segments = result.get("segments", [])
             full_text = result.get("text", "").strip()
 
