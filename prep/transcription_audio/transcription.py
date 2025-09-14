@@ -23,6 +23,8 @@ class Transcription:
                 torch_dtype=dtype,
                 low_cpu_mem_usage=True,
                 use_safetensors=True,
+                device_map="auto",  # автоматическое распределение
+                offload_folder="./offload",  # оффлокд на CPU при необходимости
             ).to(device)
 
             # `return_timestamps="word"` → получаем тайм‑коды каждого слова :contentReference[oaicite:1]{index=1}
