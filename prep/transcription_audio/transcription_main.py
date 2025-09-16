@@ -1,5 +1,6 @@
 import os
 from typing import Tuple, List
+from pathlib import Path
 from prep.transcription_audio.transcription import Transcription
 from langchain_core.documents import Document
 
@@ -26,7 +27,10 @@ def transcription_main(
         return None, None
 
     base_name = os.path.splitext(os.path.basename(audio_file))[0]
-    out_json_path = (os.path.join(out_dir, base_name + ".whisper.json") if out_dir else None)
+    out_json_path = None
+    if out_dir:
+        Path(out_dir).mkdir(parents=True, exist_ok=True)
+        out_json_path = str(Path(out_dir) / f"{base_name}.whisper.json")
 
     transcriber = Transcription(model_name=model_name, language=language)
     json_path, docs = transcriber.transcribe_to_documents(audio_file, out_json_path)
