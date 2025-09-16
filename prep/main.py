@@ -2,12 +2,23 @@ from prepare_files.prepare_files import prepare_files
 from transcription_audio.transcription import Transcription
 from create_file.create_docx import create_docx
 from download_audio_video.download_audio_video import SynologyDownloader, YandexDownloader
+from concurrent.futures import ThreadPoolExecutor
+
 
 def process_video(url, folder):
 
     # 0. Скачивание файла
-    download = YandexDownloader(url, folder)
-    saved_path = download.download()
+    if "yandex" in url or "disk.yandex" in url:
+        print("🖥 Определён источник: Яндекс.Диск")
+        downloader = YandexDownloader(url, folder)
+        saved_path = downloader.download()
+    else:
+        print("🖥 Определён источник: QuickConnect / Synology")
+        #downloader = SynologyDownloader(url, folder)
+        import concurrent.futures
+        with concurrent.futures.ThreadPoolExecutor() as executor:
+            saved_path = executor.submit(lambda: SynologyDownloader(url, folder).download()).result()
+    #download = YandexDownloader(url, folder)
     print(f"[LOG] YandexDownloader результат: {saved_path}")
 
     # 1. Подготовка аудиофайлов из видео
@@ -18,7 +29,8 @@ def process_video(url, folder):
     print(f"[LOG] prepare_files результат: {files}")
     
     # 2. Транскрибация аудиофайла
-    transcription = Transcription(model_name="antony66/whisper-large-v3-russian")
+    #transcription = Transcription(model_name="antony66/whisper-large-v3-russian")
+    transcription = Transcription(model_name="large")
     transcription_json = transcription.save_json(audio_file)
     print(f"[LOG] Transcription результат: {transcription_json}")
     #transcription.unload()

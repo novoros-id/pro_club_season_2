@@ -77,7 +77,7 @@ class SynologyDownloader:
                         filename = filename_holder["name"]
                         if not filename.lower().endswith(ext):
                             filename += ext
-                        output_path = os.path.join(OUTPUT_DIR, filename)
+                        output_path = os.path.join(self.output_dir, filename)
                         download.save_as(output_path)
                         browser.close()
                         return os.path.abspath(output_path)
@@ -103,7 +103,7 @@ class SynologyDownloader:
                 filename += ext
 
 
-            output_path = os.path.join(OUTPUT_DIR, filename)
+            output_path = os.path.join(self.output_dir, filename)
             download_file(video_url, output_path)
             browser.close()
             return os.path.abspath(output_path)
