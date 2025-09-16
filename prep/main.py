@@ -9,7 +9,7 @@ from concurrent.futures import ThreadPoolExecutor
 
 def process_video(url, folder):
 
-    # 0. Скачивание файла
+     # 0. Скачивание файла
     if "yandex" in url or "disk.yandex" in url:
         print("🖥 Определён источник: Яндекс.Диск")
         downloader = YandexDownloader(url, folder)
@@ -31,23 +31,18 @@ def process_video(url, folder):
     print(f"[LOG] prepare_files результат: {files}")
     
     # 2. Транскрибация аудиофайла
-    transcription_json, docs = transcription_main(return_docs=True, audio_file=audio_file)
+    #transcription = Transcription(model_name="antony66/whisper-large-v3-russian")
     transcription = Transcription(model_name="large")
     transcription_json = transcription.save_json(audio_file)
     print(f"[LOG] Transcription результат: {transcription_json}")
+    #transcription.unload()
 
+    
     # 3. Создание DOCX из транскрипта
     class_create_docx = create_docx(transcription_json, video_file)
     paragraph = class_create_docx.get_docx()
     print(f"[LOG] create_docx результат: {paragraph}")
-
-    # 4. Чанкинг
-    chunks = run_chunker(docs=docs)
-
-    # 5. Индексация в базу ChromaDB
-    manifest = run_index(docs=chunks)
-    print(f"[LOG] Индексация завершения: {manifest}")
-
+    
     return paragraph 
 
 # Пример использования:
