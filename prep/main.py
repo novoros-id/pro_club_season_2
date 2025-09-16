@@ -1,7 +1,5 @@
 from prepare_files.prepare_files import prepare_files
-from transcription_audio.transcription_main import transcription_main
-from rag_documetn_chunker.document_chunker_main import run_chunker
-from rag_db.rag_index_to_chroma_db_main import run_index
+from transcription_audio.transcription import Transcription
 from create_file.create_docx import create_docx
 from download_audio_video.download_audio_video import SynologyDownloader, YandexDownloader
 from concurrent.futures import ThreadPoolExecutor
