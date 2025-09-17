@@ -33,6 +33,8 @@ def process_video(url, folder):
     transcription = Transcription(model_name="large")
     transcription_json = transcription.save_json(audio_file)
     print(f"[LOG] Transcription результат: {transcription_json}")
+    transcription_docs = transcription.as_documents()
+    print(f"[LOG] Transcription as_documents результат: {transcription_docs}")
     #transcription.unload()
 
     
