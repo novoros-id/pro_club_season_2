@@ -1,6 +1,7 @@
 from prepare_files.prepare_files import prepare_files
 from transcription_audio.transcription import Transcription
 from rag_documetn_chunker.document_chunker import DocumentChunker
+from rag_db.rag_index_to_chroma_db import RagIndexer
 from create_file.create_docx import create_docx
 from download_audio_video.download_audio_video import SynologyDownloader, YandexDownloader
 from concurrent.futures import ThreadPoolExecutor
@@ -57,7 +58,13 @@ def process_video(url, folder):
         print(chunk.page_content)
         print("Metadata:", chunk.metadata)
 
-    return paragraph 
+    # 5. Индексация чанков в CromaDB
+    indexer = RagIndexer()
+    manifest = indexer.index(chunks)
+    print(f"[LOG] RagIndexer manifest: {manifest}")
+
+
+    return paragraph
 
 # Пример использования:
 if __name__ == "__main__":

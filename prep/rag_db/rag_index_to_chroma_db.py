@@ -81,17 +81,11 @@ class RagIndexer:
     # -----------------------
     # ОСНОВНОЙ МЕТОД ИНДЕКСАЦИИ
     # -----------------------
-    def index(self, pkl_path: str) -> Dict[str, Any]:
-        if not os.path.isfile(pkl_path):
-            raise FileNotFoundError(f"Не найден файл с чанками: {pkl_path}")
-
-        docs: List[Document] = self.load_docs(pkl_path)
+    def index(self, docs: List[Document]) -> Dict[str, Any]:
         if not docs:
             raise ValueError("Список Document пуст.")
 
-        ids: List[str] = []
-        metas: List[Dict[str, Any]] = []
-        texts: List[str] = []
+        ids, metas, texts = [], [], []
 
         # e5 best practice — префикс 'passage: '
         for d in docs:
@@ -113,8 +107,8 @@ class RagIndexer:
         assert len(vectors) == len(texts) == len(ids)
 
         # Безопасный upsert
-        upsert_supported = hasattr(self.collection, "upsert")
-        if upsert_supported:
+        if hasattr(self.collection, "upsert"):
+            # Если есть upsert, используем его
             self.collection.upsert(ids=ids, embeddings=vectors, metadatas=metas, documents=texts)
         else:
             # Ручной upsert: удалить существующие id порциями и добавить
@@ -131,13 +125,19 @@ class RagIndexer:
             ):
                 self.collection.add(ids=b_ids, embeddings=b_vecs, metadatas=b_meta, documents=b_txt)
 
-        manifest = {
+        return {
             "persist_dir": os.path.abspath(self.persist_dir),
             "collection": self.collection_name,
             "count_indexed": len(ids),
             "unique_audio_titles": sorted({m.get("audio_title", "") for m in metas}),
         }
-        return manifest
+
+
+    def index_from_pkl(self, pkl_path: str) -> Dict[str, Any]:
+        if not os.path.isfile(pkl_path):
+            raise FileNotFoundError(f"Не найден файл с чанками: {pkl_path}")
+        docs: List[Document] = self.load_docs(pkl_path)
+        return self.index(docs)
 
 
 def _cli() -> None:
@@ -155,7 +155,7 @@ def _cli() -> None:
         batch_size=args.batch_size,
         device=args.device,
     )
-    manifest = indexer.index(args.docs_pkl)
+    manifest = indexer.index_from_pkl(args.docs_pkl)
 
     os.makedirs("out", exist_ok=True)
     RagIndexer.save_manifest("out/ingest_manifest.json", manifest)
