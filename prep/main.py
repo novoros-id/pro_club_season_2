@@ -1,5 +1,7 @@
 from prepare_files.prepare_files import prepare_files
 from transcription_audio.transcription import Transcription
+from rag_documetn_chunker.document_chunker import DocumentChunker
+from rag_db.rag_index_to_chroma_db import RagIndexer
 from create_file.create_docx import create_docx
 from download_audio_video.download_audio_video import SynologyDownloader, YandexDownloader
 from concurrent.futures import ThreadPoolExecutor
@@ -33,6 +35,8 @@ def process_video(url, folder):
     transcription = Transcription(model_name="large")
     transcription_json = transcription.save_json(audio_file)
     print(f"[LOG] Transcription результат: {transcription_json}")
+    transcription_docs = transcription.as_documents()
+    print(f"[LOG] Transcription as_documents количество: {len(transcription_docs)}")
     #transcription.unload()
 
     
@@ -41,7 +45,26 @@ def process_video(url, folder):
     paragraph = class_create_docx.get_docx()
     print(f"[LOG] create_docx результат: {paragraph}")
     
-    return paragraph 
+
+    # 4. Создание чанков из транскрипта
+    if not transcription_docs:
+        print("[ERROR] Нет документов для создания чанков.")
+        return paragraph
+    
+    chunker = DocumentChunker(chunk_size=3, chunk_overlap=0.5)
+    chunks = chunker.chunk(transcription_docs)
+    print(f"[LOG] DocumentChunker количество чанков: {len(chunks)}")
+    for chunk in chunks[:3]:
+        print(chunk.page_content)
+        print("Metadata:", chunk.metadata)
+
+    # 5. Индексация чанков в CromaDB
+    indexer = RagIndexer()
+    manifest = indexer.index(chunks)
+    print(f"[LOG] RagIndexer manifest: {manifest}")
+
+
+    return paragraph
 
 # Пример использования:
 if __name__ == "__main__":
