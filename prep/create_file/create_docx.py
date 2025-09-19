@@ -60,6 +60,40 @@ def create_prompt_for_sectioning(paragraphs):
     """
     return prompt
 
+def image_is_required(paragraph):
+
+    llm = OllamaLLM(model="gemma3:12b", temperature=0.1, base_url=URL_LLM, client_kwargs={'headers': headers})
+    prompt = "Тебе необходимо определить требует ли текст добавления картинки. " \
+    "Необходимо ориентироваться на слова: показать, перейти, посмотрите, сейчас на экране. " \
+    "Если нужна картинка ответь 1 если не нужна ответь 0. Только результат без пояснений. " \
+    "Вот текст: " + paragraph
+
+    try:
+        response = llm.invoke(prompt)
+    except Exception as e:
+        print(f"Ошибка при вызове LLM: {e}")
+        
+    return response
+
+def table_segments_time(json_file_path):
+    # читаем JSON
+    with open(json_file_path, "r", encoding="utf-8") as f:
+        data = json.load(f)
+
+    # собираем строки (текст, время)
+    rows = [(seg["text"], seg["end"]) for seg in data.get("segments", [])]
+
+    # выводим таблицу в консоль
+    #col1, col2 = "segment", "time"
+    #print(f"{col1:<80} | {col2}")
+    #print("-" * 95)
+    #for text, end in rows:
+    #    # ограничим вывод текста, чтобы таблица не ломалась
+    #    short_text = (text[:77] + "...") if len(text) > 77 else text
+    #    print(f"{short_text:<80} | {end}")
+
+    return rows
+
 
 def get_sections_from_llm(paragraphs, max_paragraphs_per_chunk=20):
     """
@@ -192,8 +226,18 @@ class create_docx:
                     break
 
         # === Шаг 2: Разбиваем текст на абзацы ===
-        class_text_to_paragraphs = text_to_paragraphs(full_text)
+        class_text_to_paragraphs = text_to_paragraphs(full_text, json_file_path)
         paragraphs = class_text_to_paragraphs.get_text_to_paragraphs_array()
+        
+        #1
+        segments_time = table_segments_time(json_file_path)
+        segments =  [text for text, _ in table_segments_time]
+        class_text_to_paragraphs = text_to_paragraphs(full_text, segments)
+        paragraphs_table = class_text_to_paragraphs.get_text_to_paragraphs_table()        
+
+        for paragraph in paragraphs:
+            image_is_required_result = image_is_required(paragraph)
+        #1
 
         if UseTextModify==True:
             text_modifier = TextModify()
