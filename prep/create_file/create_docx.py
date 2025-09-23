@@ -252,8 +252,29 @@ class create_docx:
         class_text_to_paragraphs = text_to_paragraphs(full_text, segments_time)
         paragraphs_table = class_text_to_paragraphs.get_text_to_paragraphs_table()        
 
-        for paragraph in paragraphs:
+        paragraphs_time_scr = {}
+
+        for idx, row in enumerate(paragraphs_table, start=1):
+            paragraph, end_time = row  # ("текст", end)
+
             image_is_required_result = image_is_required(paragraph)
+
+            if image_is_required_result == "1\n" or image_is_required_result == "1" or image_is_required_result == 1:
+                # Проверяем, есть ли уже такой end_time в словаре
+                existing_keys = [k for k, v in paragraphs_time_scr.items() if v == end_time]
+
+                if existing_keys:
+                    # Если уже есть, удаляем старый ключ и вставляем новый
+                    old_key = existing_keys[0]
+                    del paragraphs_time_scr[old_key]
+                    paragraphs_time_scr[idx] = end_time
+                else:
+                    # Если нет — добавляем
+                    paragraphs_time_scr[idx] = end_time
+
+
+        #for paragraph in paragraphs:
+        #    image_is_required_result = image_is_required(paragraph)
         #1
 
         if UseTextModify==True:
@@ -267,18 +288,18 @@ class create_docx:
         sections = get_sections_from_llm(paragraphs)  # Список: {title, start_par, end_par}
 
         # === Шаг 4: Связываем абзацы с временем (по номеру абзаца) ===
-        count_time_scr = 0
-        paragraphs_time_scr = {}
-        for par_count, paragraph in enumerate(paragraphs, start=1):
-            lower_text = paragraph.lower()
-            count_lower_text = lower_text.count("сейчас на экране")
-            if count_lower_text > 0:
-                for _ in range(count_lower_text):
-                    if count_time_scr < len(table_time_screen):
-                        paragraphs_time_scr[par_count] = table_time_screen[count_time_scr]["Time"]
-                        count_time_scr += 1
-                    else:
-                        break
+        #count_time_scr = 0
+        #paragraphs_time_scr = {}
+        #for par_count, paragraph in enumerate(paragraphs, start=1):
+        #    lower_text = paragraph.lower()
+        #    count_lower_text = lower_text.count("сейчас на экране")
+        #    if count_lower_text > 0:
+        #        for _ in range(count_lower_text):
+        #            if count_time_scr < len(table_time_screen):
+        #                paragraphs_time_scr[par_count] = table_time_screen[count_time_scr]["Time"]
+        #                count_time_scr += 1
+        #            else:
+        #                break
 
         # === Шаг 5: Формируем документ с разделами и картинками ===
         video_path = self.video_path
