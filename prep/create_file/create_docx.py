@@ -244,13 +244,14 @@ class create_docx:
                     break
 
         # === Шаг 2: Разбиваем текст на абзацы ===
-        class_text_to_paragraphs = text_to_paragraphs(full_text, json_file_path)
-        paragraphs = class_text_to_paragraphs.get_text_to_paragraphs_array()
+        #class_text_to_paragraphs = text_to_paragraphs(full_text, json_file_path)
+        #paragraphs = class_text_to_paragraphs.get_text_to_paragraphs_array()
         
         #1
         segments_time = table_segments_time(json_file_path)
         class_text_to_paragraphs = text_to_paragraphs(full_text, segments_time)
         paragraphs_table = class_text_to_paragraphs.get_text_to_paragraphs_table()        
+        paragraphs = [p[0] for p in paragraphs_table]
 
         paragraphs_time_scr = {}
 
@@ -259,7 +260,8 @@ class create_docx:
 
             image_is_required_result = image_is_required(paragraph)
 
-            if image_is_required_result == "1\n" or image_is_required_result == "1" or image_is_required_result == 1:
+            #if image_is_required_result == "1\n" or image_is_required_result == "1" or image_is_required_result == 1:
+            if '1' in str(image_is_required_result):
                 # Проверяем, есть ли уже такой end_time в словаре
                 existing_keys = [k for k, v in paragraphs_time_scr.items() if v == end_time]
 
