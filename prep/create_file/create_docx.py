@@ -244,8 +244,6 @@ class create_docx:
                     break
 
         # === Шаг 2: Разбиваем текст на абзацы ===
-        #class_text_to_paragraphs = text_to_paragraphs(full_text, json_file_path)
-        #paragraphs = class_text_to_paragraphs.get_text_to_paragraphs_array()
         
         #1
         segments_time = table_segments_time(json_file_path)
@@ -274,11 +272,6 @@ class create_docx:
                     # Если нет — добавляем
                     paragraphs_time_scr[idx] = end_time
 
-
-        #for paragraph in paragraphs:
-        #    image_is_required_result = image_is_required(paragraph)
-        #1
-
         if UseTextModify==True:
             text_modifier = TextModify()
             for i in range(len(paragraphs)):
@@ -289,21 +282,7 @@ class create_docx:
         print("Отправляем текст в LLM для разбиения на разделы...")
         sections = get_sections_from_llm(paragraphs)  # Список: {title, start_par, end_par}
 
-        # === Шаг 4: Связываем абзацы с временем (по номеру абзаца) ===
-        #count_time_scr = 0
-        #paragraphs_time_scr = {}
-        #for par_count, paragraph in enumerate(paragraphs, start=1):
-        #    lower_text = paragraph.lower()
-        #    count_lower_text = lower_text.count("сейчас на экране")
-        #    if count_lower_text > 0:
-        #        for _ in range(count_lower_text):
-        #            if count_time_scr < len(table_time_screen):
-        #                paragraphs_time_scr[par_count] = table_time_screen[count_time_scr]["Time"]
-        #                count_time_scr += 1
-        #            else:
-        #                break
-
-        # === Шаг 5: Формируем документ с разделами и картинками ===
+        # === Шаг 4: Формируем документ с разделами и картинками ===
         video_path = self.video_path
         current_paragraph_index = 0  # Считаем, сколько абзацев текста уже вставлено
 
@@ -395,7 +374,7 @@ class create_docx:
                         para_text = paragraphs[par_num - 1]
                         doc.add_paragraph('\t' + para_text)
 
-        # === Шаг 6: Сохранение ===
+        # === Шаг 5: Сохранение ===
         docx_file_path = os.path.splitext(json_file_path)[0] + '.docx'
         doc.save(docx_file_path)
         print(f"Документ с разделами сохранён: {docx_file_path}")
