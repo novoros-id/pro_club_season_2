@@ -76,24 +76,42 @@ def image_is_required(paragraph):
     return response
 
 def table_segments_time(json_file_path):
-    # читаем JSON
     with open(json_file_path, "r", encoding="utf-8") as f:
         data = json.load(f)
 
-    # собираем строки (текст, время)
-    rows = [(seg["text"], seg["end"]) for seg in data.get("segments", [])]
+    rows = []
+    buffer = ""  # сюда складываем "висящее" начало предложения
 
-    # выводим таблицу в консоль
-    #col1, col2 = "segment", "time"
-    #print(f"{col1:<80} | {col2}")
-    #print("-" * 95)
-    #for text, end in rows:
-    #    # ограничим вывод текста, чтобы таблица не ломалась
-    #    short_text = (text[:77] + "...") if len(text) > 77 else text
-    #    print(f"{short_text:<80} | {end}")
+    for i, seg in enumerate(data.get("segments", [])):
+        text = seg["text"].strip()
+
+        # добавляем "хвост" из предыдущего сегмента, если он был
+        if buffer:
+            text = buffer + " " + text
+            buffer = ""
+
+        # режем на предложения по ". "
+        sentences = text.split(". ")
+
+        # проверяем, закончился ли последний кусок точкой
+        last_part = sentences[-1]
+        if not last_part.endswith((".", "!", "?")):
+            # предложение не закончилось → переносим в buffer для следующего сегмента
+            buffer = sentences.pop()
+
+        # теперь фиксируем завершённые предложения
+        for sent in sentences:
+            sent = sent.strip()
+            if sent:
+                if not sent.endswith((".", "!", "?")):
+                    sent += "."
+                rows.append((sent, seg["end"]))
+
+    # на всякий случай — если файл закончился, а buffer остался
+    if buffer:
+        rows.append((buffer, data["segments"][-1]["end"]))
 
     return rows
-
 
 def get_sections_from_llm(paragraphs, max_paragraphs_per_chunk=20):
     """
@@ -231,8 +249,7 @@ class create_docx:
         
         #1
         segments_time = table_segments_time(json_file_path)
-        segments =  [text for text, _ in table_segments_time]
-        class_text_to_paragraphs = text_to_paragraphs(full_text, segments)
+        class_text_to_paragraphs = text_to_paragraphs(full_text, segments_time)
         paragraphs_table = class_text_to_paragraphs.get_text_to_paragraphs_table()        
 
         for paragraph in paragraphs:
