@@ -60,6 +60,58 @@ def create_prompt_for_sectioning(paragraphs):
     """
     return prompt
 
+def image_is_required(paragraph):
+
+    llm = OllamaLLM(model="gemma3:12b", temperature=0.1, base_url=URL_LLM, client_kwargs={'headers': headers})
+    prompt = "Тебе необходимо определить требует ли текст добавления картинки. " \
+    "Необходимо ориентироваться на слова: показать, перейти, посмотрите, сейчас на экране. " \
+    "Если нужна картинка ответь 1 если не нужна ответь 0. Только результат без пояснений. " \
+    "Вот текст: " + paragraph
+
+    try:
+        response = llm.invoke(prompt)
+    except Exception as e:
+        print(f"Ошибка при вызове LLM: {e}")
+        
+    return response
+
+def table_segments_time(json_file_path):
+    with open(json_file_path, "r", encoding="utf-8") as f:
+        data = json.load(f)
+
+    rows = []
+    buffer = ""  # сюда складываем "висящее" начало предложения
+
+    for i, seg in enumerate(data.get("segments", [])):
+        text = seg["text"].strip()
+
+        # добавляем "хвост" из предыдущего сегмента, если он был
+        if buffer:
+            text = buffer + " " + text
+            buffer = ""
+
+        # режем на предложения по ". "
+        sentences = text.split(". ")
+
+        # проверяем, закончился ли последний кусок точкой
+        last_part = sentences[-1]
+        if not last_part.endswith((".", "!", "?")):
+            # предложение не закончилось → переносим в buffer для следующего сегмента
+            buffer = sentences.pop()
+
+        # теперь фиксируем завершённые предложения
+        for sent in sentences:
+            sent = sent.strip()
+            if sent:
+                if not sent.endswith((".", "!", "?")):
+                    sent += "."
+                rows.append((sent, seg["end"]))
+
+    # на всякий случай — если файл закончился, а buffer остался
+    if buffer:
+        rows.append((buffer, data["segments"][-1]["end"]))
+
+    return rows
 
 def get_sections_from_llm(paragraphs, max_paragraphs_per_chunk=20):
     """
@@ -192,8 +244,33 @@ class create_docx:
                     break
 
         # === Шаг 2: Разбиваем текст на абзацы ===
-        class_text_to_paragraphs = text_to_paragraphs(full_text)
-        paragraphs = class_text_to_paragraphs.get_text_to_paragraphs_array()
+        
+        #1
+        segments_time = table_segments_time(json_file_path)
+        class_text_to_paragraphs = text_to_paragraphs(full_text, segments_time)
+        paragraphs_table = class_text_to_paragraphs.get_text_to_paragraphs_table()        
+        paragraphs = [p[0] for p in paragraphs_table]
+
+        paragraphs_time_scr = {}
+
+        for idx, row in enumerate(paragraphs_table, start=1):
+            paragraph, end_time = row  # ("текст", end)
+
+            image_is_required_result = image_is_required(paragraph)
+
+            #if image_is_required_result == "1\n" or image_is_required_result == "1" or image_is_required_result == 1:
+            if '1' in str(image_is_required_result):
+                # Проверяем, есть ли уже такой end_time в словаре
+                existing_keys = [k for k, v in paragraphs_time_scr.items() if v == end_time]
+
+                if existing_keys:
+                    # Если уже есть, удаляем старый ключ и вставляем новый
+                    old_key = existing_keys[0]
+                    del paragraphs_time_scr[old_key]
+                    paragraphs_time_scr[idx] = end_time
+                else:
+                    # Если нет — добавляем
+                    paragraphs_time_scr[idx] = end_time
 
         if UseTextModify==True:
             text_modifier = TextModify()
@@ -205,21 +282,7 @@ class create_docx:
         print("Отправляем текст в LLM для разбиения на разделы...")
         sections = get_sections_from_llm(paragraphs)  # Список: {title, start_par, end_par}
 
-        # === Шаг 4: Связываем абзацы с временем (по номеру абзаца) ===
-        count_time_scr = 0
-        paragraphs_time_scr = {}
-        for par_count, paragraph in enumerate(paragraphs, start=1):
-            lower_text = paragraph.lower()
-            count_lower_text = lower_text.count("сейчас на экране")
-            if count_lower_text > 0:
-                for _ in range(count_lower_text):
-                    if count_time_scr < len(table_time_screen):
-                        paragraphs_time_scr[par_count] = table_time_screen[count_time_scr]["Time"]
-                        count_time_scr += 1
-                    else:
-                        break
-
-        # === Шаг 5: Формируем документ с разделами и картинками ===
+        # === Шаг 4: Формируем документ с разделами и картинками ===
         video_path = self.video_path
         current_paragraph_index = 0  # Считаем, сколько абзацев текста уже вставлено
 
@@ -311,7 +374,7 @@ class create_docx:
                         para_text = paragraphs[par_num - 1]
                         doc.add_paragraph('\t' + para_text)
 
-        # === Шаг 6: Сохранение ===
+        # === Шаг 5: Сохранение ===
         docx_file_path = os.path.splitext(json_file_path)[0] + '.docx'
         doc.save(docx_file_path)
         print(f"Документ с разделами сохранён: {docx_file_path}")
