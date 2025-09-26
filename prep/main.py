@@ -1,13 +1,26 @@
 from prepare_files.prepare_files import prepare_files
 from transcription_audio.transcription import Transcription
+from rag_documetn_chunker.document_chunker import DocumentChunker
+from rag_db.rag_index_to_chroma_db import RagIndexer
 from create_file.create_docx import create_docx
 from download_audio_video.download_audio_video import SynologyDownloader, YandexDownloader
+from concurrent.futures import ThreadPoolExecutor
+
 
 def process_video(url, folder):
 
-    # 0. Скачивание файла
-    download = YandexDownloader(url, folder)
-    saved_path = download.download()
+     # 0. Скачивание файла
+    if "yandex" in url or "disk.yandex" in url:
+        print("🖥 Определён источник: Яндекс.Диск")
+        downloader = YandexDownloader(url, folder)
+        saved_path = downloader.download()
+    else:
+        print("🖥 Определён источник: QuickConnect / Synology")
+        #downloader = SynologyDownloader(url, folder)
+        import concurrent.futures
+        with concurrent.futures.ThreadPoolExecutor() as executor:
+            saved_path = executor.submit(lambda: SynologyDownloader(url, folder).download()).result()
+    #download = YandexDownloader(url, folder)
     print(f"[LOG] YandexDownloader результат: {saved_path}")
 
     # 1. Подготовка аудиофайлов из видео
@@ -18,17 +31,40 @@ def process_video(url, folder):
     print(f"[LOG] prepare_files результат: {files}")
     
     # 2. Транскрибация аудиофайла
-    transcription = Transcription(model_name="antony66/whisper-large-v3-russian")
+    #transcription = Transcription(model_name="antony66/whisper-large-v3-russian")
+    transcription = Transcription(model_name="large")
     transcription_json = transcription.save_json(audio_file)
     print(f"[LOG] Transcription результат: {transcription_json}")
-    #transcription.unload()
+    transcription_docs = transcription.as_documents()
+    print(f"[LOG] Transcription as_documents количество: {len(transcription_docs)}")
+    transcription.unload()
 
     
     # 3. Создание DOCX из транскрипта
     class_create_docx = create_docx(transcription_json, video_file)
     paragraph = class_create_docx.get_docx()
     print(f"[LOG] create_docx результат: {paragraph}")
-    return paragraph 
+    
+
+    # 4. Создание чанков из транскрипта
+    if not transcription_docs:
+        print("[ERROR] Нет документов для создания чанков.")
+        return paragraph
+    
+    chunker = DocumentChunker(chunk_size=3, chunk_overlap=0.5)
+    chunks = chunker.chunk(transcription_docs)
+    print(f"[LOG] DocumentChunker количество чанков: {len(chunks)}")
+    for chunk in chunks[:3]:
+        print(chunk.page_content)
+        print("Metadata:", chunk.metadata)
+
+    # 5. Индексация чанков в CromaDB
+    indexer = RagIndexer()
+    manifest = indexer.index(chunks)
+    print(f"[LOG] RagIndexer manifest: {manifest}")
+
+
+    return paragraph
 
 # Пример использования:
 if __name__ == "__main__":

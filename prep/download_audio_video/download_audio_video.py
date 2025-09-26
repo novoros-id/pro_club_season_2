@@ -3,6 +3,7 @@ import requests
 import os
 
 OUTPUT_DIR = "videoinput"
+os.makedirs(OUTPUT_DIR, exist_ok=True)
 
 
 def download_file(url, path):
@@ -20,52 +21,92 @@ class SynologyDownloader:
 
     def download(self) -> str:
         video_url_holder = {"url": None}
-        filename_holder = {"name": "downloaded_video.mp4"}
+        filename_holder = {"name": "downloaded_video"}  # пока без расширения
 
         with sync_playwright() as p:
             browser = p.chromium.launch(headless=True)
             context = browser.new_context()
             page = context.new_page()
 
+            # Первая попытка — ловим media response на главной странице
             def handle_response(response):
                 if response.request.resource_type == "media":
-                    print("🎯 Найдена медиа-ссылка:", response.url)
                     video_url_holder["url"] = response.url
 
             page.on("response", handle_response)
-
-            print("🌐 Открываю страницу...")
             page.goto(self.video_page_url)
-            page.wait_for_timeout(3000)  # Ждём, чтобы meta успел загрузиться
+            page.wait_for_timeout(3000)
 
-            print("🔍 Получаю имя файла из meta-тега...")
+            # Пытаемся взять имя файла из meta
             meta_tag = page.locator('meta[property="og:title"]').first
             if meta_tag:
                 content = meta_tag.get_attribute("content")
                 if content:
-                    print("📁 Имя файла:", content)
                     filename_holder["name"] = content.strip()
 
-            #page.wait_for_timeout(5000)  # Ждём, пока поймается video-ссылка
-            for _ in range(10):
-                if video_url_holder["url"]:
-                    break
-                page.wait_for_timeout(1000)
-            browser.close()
+            page.wait_for_timeout(5000)
 
-        video_url = video_url_holder["url"]
-        print(video_url)
-        filename = filename_holder["name"]
-        output_path = os.path.join(self.output_dir, filename)
+            # Если видео не найдено на основной странице — используем кнопку Download
+            if not video_url_holder["url"]:
+                frame = None
+                for f in page.frames:
+                    try:
+                        if "uv.html" in f.url:
+                            frame = f
+                            break
+                    except:
+                        continue
 
-        if video_url:
-            print("⬇️ Скачиваю видео...")
+                if frame:
+                    selectors = ['text=Download', '#ext-gen70', '#ext-comp-1047', 'button:has-text("Download")']
+                    button = None
+                    for sel in selectors:
+                        try:
+                            btn = frame.locator(sel).first
+                            if btn and btn.is_visible():
+                                button = btn
+                                break
+                        except:
+                            continue
+
+                    if button:
+                        with page.expect_download() as download_info:
+                            button.click()
+                        download = download_info.value
+                        ext = os.path.splitext(download.suggested_filename)[1] or ".mp4"
+                        filename = filename_holder["name"]
+                        if not filename.lower().endswith(ext):
+                            filename += ext
+                        output_path = os.path.join(self.output_dir, filename)
+                        download.save_as(output_path)
+                        browser.close()
+                        return os.path.abspath(output_path)
+
+                # Если кнопка не найдена — закрываем браузер
+                browser.close()
+                return ""
+
+            # Если meta-ссылка найдена — скачиваем через requests
+            video_url = video_url_holder["url"]
+            filename = filename_holder["name"]
+
+            resp_head = requests.head(video_url, allow_redirects=True)
+            content_type = resp_head.headers.get("Content-Type", "").lower()
+            ext_map = {
+                "video/mp4": ".mp4",
+                "video/quicktime": ".mov",
+                "video/webm": ".webm",
+                "video/x-matroska": ".mkv"
+            }
+            ext = ext_map.get(content_type, "")
+            if not filename.lower().endswith(ext):
+                filename += ext
+
+
+            output_path = os.path.join(self.output_dir, filename)
             download_file(video_url, output_path)
-            print(f"✅ Сохранено: {output_path}")
+            browser.close()
             return os.path.abspath(output_path)
-        else:
-            print("❌ Медиа-ссылка не найдена.")
-            return ""
 
 
 class YandexDownloader:
@@ -79,12 +120,10 @@ class YandexDownloader:
         if response.status_code == 200:
             data = response.json()
             filename = data.get("name", "yadisk_downloaded_file")
-            if not filename.lower().endswith(".mp4"):
-                filename += ".mp4"
-            return filename
+            return filename  # НЕ добавляем .mp4
         else:
             print(f"❌ Не удалось получить имя файла из API: {response.status_code}")
-            return "yadisk_downloaded_file.mp4"
+            return "yadisk_downloaded_file"
 
     def _download_file(self, file_url, path):
         response = requests.get(file_url, stream=True, allow_redirects=True)
