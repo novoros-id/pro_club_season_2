@@ -1,3 +1,1 @@
-URL_LLM = ""
-USER_LLM = ""
-PASSWORD_LLM = ""
+# Configuration file for creating files

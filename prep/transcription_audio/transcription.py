@@ -1,5 +1,5 @@
 # pip install --upgrade "torch>=2.2" transformers accelerate
-import os, json, torch
+import os, json, torch, datetime
 import whisper  # openai‑whisper
 from typing import List, Tuple, Optional
 from langchain_core.documents import Document
@@ -50,10 +50,8 @@ class Transcription:
 
     def transcribe(self, audio_path: str) -> dict:
         if self._hf_backend:
-            #out = self.pipe(audio_path, generate_kwargs={"language": self.language})
-            # Стало:
             try:
-                print(f"[LOG] Начал транскрибацию")
+                print(f"[LOG] Начал транскрибацию {datetime.datetime.now().isoformat()}")
                 out = self.pipe(
                     audio_path,
                     generate_kwargs={
@@ -73,7 +71,7 @@ class Transcription:
             full_text = out.get("text", "").strip()
         else:
             try:
-                print(f"[LOG] Начал транскрибацию")
+                print(f"[LOG] Начал транскрибацию {datetime.datetime.now().isoformat()}")
                 result = self.model.transcribe(
                     audio_path,
                     language=self.language,

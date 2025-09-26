@@ -6,6 +6,7 @@ from telegram import Update
 from telegram.ext import ApplicationBuilder, CommandHandler, MessageHandler, ContextTypes, filters
 from main import process_video
 from config import USER_FOLDER
+from rag_llm.llm_client import LLMClient
 
 # Логирование
 logging.basicConfig(
@@ -30,14 +31,30 @@ def generate_user_folder(user):
     os.makedirs(folder_path, exist_ok=True)
     return folder_path
 
+llm_client = LLMClient()
+
 # Обработчик команды /start
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    await update.message.reply_text("Привет! Пришли мне ссылку на видео.")
+    await update.message.reply_text("Привет! Пришли мне ссылку на видео или запрос, начинающийся с '$'.")
 
 # Обработчик сообщений
 async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user = update.message.from_user
     text = update.message.text.strip()
+
+    if text.startswith('$'):
+        query = text[1:].strip()
+        try:
+            response = llm_client.generate_with_retrieval(
+                question = query,
+                return_with_sources = True,  # изменено на True для возврата источников
+                mode = "assistant"
+            )
+            await update.message.reply_text(response)
+        except Exception as e:
+            logging.error(f"Ошибка при генерации ответа LLM для пользователя {user.id}: {e}")
+            await update.message.reply_text("Произошла ошибка при обработке вашего запроса.")
+        return
 
     if not is_url(text):
         await update.message.reply_text("Это не похоже на ссылку. Пожалуйста, пришли корректную ссылку на видео.")
