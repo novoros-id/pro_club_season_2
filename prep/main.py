@@ -37,7 +37,7 @@ def process_video(url, folder):
     print(f"[LOG] Transcription результат: {transcription_json}")
     transcription_docs = transcription.as_documents()
     print(f"[LOG] Transcription as_documents количество: {len(transcription_docs)}")
-    #transcription.unload()
+    transcription.unload()
 
     
     # 3. Создание DOCX из транскрипта
