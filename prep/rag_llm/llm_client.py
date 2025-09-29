@@ -154,12 +154,14 @@ class LLMClient:
 
             # Формируем таймкод
             ts = meta.get("timestamp_range", None)
-            if isinstance(ts, (list, tuple)) and len(ts) == 2:
+            if isinstance(ts, (str)) and "-" in ts:
+                time_range = ts.strip()
+            elif isinstance(ts, (list, tuple)) and len(ts) == 2:
                 t1 = _format_ts(float(ts[0]))
                 t2 = _format_ts(float(ts[1]))
-                time_range = f"[{t1} - {t2}]"
+                time_range = f"{t1} - {t2}"
             else:
-                time_range = "00:00-00:00"
+                time_range = "00:00 - 00:00 (unknown timestamp)"
 
             audio_title = meta.get("audio_title", "unknown_audio")
 
@@ -256,8 +258,8 @@ class LLMClient:
         # 3. Генерация ответа моделью
         raw_answer = self._llm(final_prompt).strip()
 
-        # 4. Добавляем "Источники", если их нет в ответе
-        if sources and "Источники:" not in raw_answer:
+        # 4. Добавляем "Источники", если это не return_with_sources=True
+        if sources and not return_with_sources:
             sources_lines = ["", "Источники:"]
             seen = set()
             for title, time_range in sources:

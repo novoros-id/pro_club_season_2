@@ -7,6 +7,7 @@ from telegram.ext import ApplicationBuilder, CommandHandler, MessageHandler, Con
 from main import process_video
 from config import USER_FOLDER
 from rag_llm.llm_client import LLMClient
+from telegram.helpers import escape_markdown
 
 # Логирование
 logging.basicConfig(
@@ -31,6 +32,7 @@ def generate_user_folder(user):
     os.makedirs(folder_path, exist_ok=True)
     return folder_path
 
+
 llm_client = LLMClient()
 
 # Обработчик команды /start
@@ -44,13 +46,37 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     if text.startswith('$'):
         query = text[1:].strip()
+        return_with_sources = True  # параметр для включения возврата источников в ответе
         try:
             response = llm_client.generate_with_retrieval(
                 question = query,
-                return_with_sources = True,  # изменено на True для возврата источников
+                return_with_sources = return_with_sources,
                 mode = "assistant"
             )
-            await update.message.reply_text(response)
+            if return_with_sources:
+                answer_text = escape_markdown(response.get("answer", "Извините, я не смог сформировать ответ"), version=2)
+                sources = response.get("sources", [])
+                context_len = response.get("context_len", 0)
+                mode = response.get("mode", "unknown")
+
+                markdown_response = f"*Ответ:*\n{answer_text}\n\n"
+                if sources:
+                    markdown_response += "*Источники:*\n"
+                    seen = set()
+                    for source in sources:
+                        title = escape_markdown(source.get("title", "Неизвестный источник"), version=2)
+                        time_range = escape_markdown(source.get("time_range", "Неизвестный временной диапазон"), version=2)
+                        source_key = (title, time_range)
+                        if source_key not in seen:
+                            markdown_response += f"{title} {time_range}\n"
+                            seen.add(source_key)
+                markdown_response += f"\n*Дополнительно:*\n_Длина контекста:_ {context_len} символов\n_Режим:_ {mode}"
+                logging.info(f"Ответ пользователю {user.id} {markdown_response}")
+                await update.message.reply_text(markdown_response, parse_mode='MarkdownV2')
+            else:
+                answer_text = response if isinstance(response, str) else "Извините, я не смог сформировать ответ"
+                logging.info(f"Ответ пользователю {user.id} {answer_text}")
+                await update.message.reply_text(answer_text)
         except Exception as e:
             logging.error(f"Ошибка при генерации ответа LLM для пользователя {user.id}: {e}")
             await update.message.reply_text("Произошла ошибка при обработке вашего запроса.")
