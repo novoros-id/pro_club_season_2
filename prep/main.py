@@ -32,7 +32,7 @@ def process_video(url, folder):
     
     # 2. Транскрибация аудиофайла
     #transcription = Transcription(model_name="antony66/whisper-large-v3-russian")
-    transcription = Transcription(model_name="large")
+    transcription = Transcription(model_name="small")
     transcription_json = transcription.save_json(audio_file)
     print(f"[LOG] Transcription результат: {transcription_json}")
     transcription_docs = transcription.as_documents()

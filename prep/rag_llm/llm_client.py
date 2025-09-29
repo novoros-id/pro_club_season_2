@@ -3,13 +3,15 @@ from __future__ import annotations
 import os
 import base64
 from dataclasses import dataclass
-from typing import List, Dict, Any, Optional, Tuple
+from typing import List, Dict, Any, Optional, Tuple, Union
+from rag_llm.llm_prompt import compose_prompt
 
 from dotenv import load_dotenv
 load_dotenv()
 
 from langchain_ollama import OllamaLLM
-
+from langchain_huggingface import HuggingFaceEmbeddings
+import chromadb
 
 
 # ----------------------
@@ -82,7 +84,6 @@ class LLMClient:
         temperature: Optional[float] = None,
         top_p: Optional[float] = None,
         top_k: Optional[int] = None,
-        max_tokens: Optional[int] = None,
     ) -> None:
         self.settings = settings or LLMSettings.from_env()
         self.preset = PRESETS.get(preset, PRESETS["assistant"])
@@ -91,7 +92,6 @@ class LLMClient:
         self.temperature = self.preset.temperature if temperature is None else temperature
         self.top_p = self.preset.top_p if top_p is None else top_p
         self.top_k = self.preset.top_k if top_k is None else top_k
-        self.max_tokens = self.preset.max_tokens if max_tokens is None else max_tokens
 
         headers = {}
         if self.settings.user and self.settings.password:
@@ -111,127 +111,170 @@ class LLMClient:
         self.additional_kwargs: Dict[str, Any] = {}
         if self.top_k is not None:
             self.additional_kwargs["top_k"] = self.top_k
-        if self.max_tokens is not None:
-            self.additional_kwargs["num_predict"] = self.max_tokens 
+    
 
-    def generate(self, prompt: str) -> str:
-        """Синхронная генерация. На вход — уже готовый промпт."""
-        if not isinstance(prompt, str) or not prompt.strip():
-            raise ValueError("prompt должен быть непустой строкой")
-        result = self._llm.invoke(prompt)  # type: ignore
-        if isinstance(result, str):
-            return result
-        return getattr(result, "content", str(result))
+    def _build_context(
+            self,
+            chunks: List[Dict[str, Any]],
+            top_k: int,
+            score_threshold: float,
+            max_chars: int,
+    ) -> Tuple[str, List[Tuple[str, str]]]:
+        """
+        Args:
+            chunks: Список словарей с ключами: 'text', 'score', 'source'
+            top_k: Количество лучших чанков для включения в контекст. Если None, то все
+            score_threshold: Мин. порог (дистанция векторов, чем меньше, тем лучше). Если None, то не учитывается
+            max_chars: Максимальное число символов в итоговом контексте
+        """
 
+        # 1. Фильтрация по score_threshold
+        filtered_chunks = []
+        for ch in chunks:
+            meta = ch.get("meta", {})
+            score = meta.get("score")
+            if score is None or score <= score_threshold:
+                filtered_chunks.append(ch)
+
+        if not filtered_chunks:
+            return "", []
+
+        # 2. Ограничение по top_k
+        if top_k > 0:
+            filtered_chunks = filtered_chunks[:top_k]
+
+        # 3. Сборка текста и источников
+        context_lines = []
+        sources: List[Tuple[str, str]] = []
+        total_len = 0
+
+        for idx, ch in enumerate(filtered_chunks, start=1):
+            text = ch.get("text", "").replace("\n", "  ").strip()
+            meta = ch.get("meta", {})
+
+            # Формируем таймкод
+            ts = meta.get("timestamp_range", None)
+            if isinstance(ts, (str)) and "-" in ts:
+                time_range = ts.strip()
+            elif isinstance(ts, (list, tuple)) and len(ts) == 2:
+                t1 = _format_ts(float(ts[0]))
+                t2 = _format_ts(float(ts[1]))
+                time_range = f"{t1} - {t2}"
+            else:
+                time_range = "00:00 - 00:00 (unknown timestamp)"
+
+            audio_title = meta.get("audio_title", "unknown_audio")
+
+            # Добавляем кусков в контекст с лимитом по символам
+            snipped_text = f"[{idx}] {text}"
+            if total_len + len(snipped_text) > max_chars:
+                break
+
+            context_lines.append(snipped_text)
+            sources.append((audio_title, time_range))
+            total_len += len(snipped_text)
+
+        context_block = "\n".join(context_lines)
+        return context_block, sources
+    
+    def retrieve_chunks(self, question: str, collection_name: str = "audio_chunks", n_results: int = 5) -> List[Dict[str, Any]]:
+        client = chromadb.PersistentClient(path=os.getenv("CHROMA_PERSIST_DIR"))
+        collection = client.get_collection(collection_name)
+
+        embeddings = HuggingFaceEmbeddings(model_name="intfloat/multilingual-e5-large")
+        query_embedding = embeddings.embed_query(question)
+
+        results = collection.query(
+            query_embeddings=[query_embedding],
+            n_results=n_results
+        )
+
+        docs = results["documents"][0]
+        metas = results["metadatas"][0]
+        scores = results["distances"][0]
+
+        chunks = []
+        for doc, meta, score in zip(docs, metas, scores):
+            chunks.append({
+                "text": doc,
+                "meta": {
+                    "score": score,
+                    "timestamp_range": meta.get("timestamp_range"),
+                    "audio_title": meta.get("audio_title", "unknown_audio")
+                }
+            })
+        return chunks
+    
     def generate_with_retrieval(
         self,
         question: str,
-        retrieved_chunks: List[Dict[str, Any]],
+        *,
         system_prompt: Optional[str] = None,
-        k: Optional[int] = None,
-        score_threshold: Optional[float] = None,
-        mmr: bool = False,
-        context_char_limit: int = 12000,
-    ) -> str:
-        """Композитный метод: собирает контекст и добавляет раздел 'Источники' (audio + таймкоды)."""
+        mode: str = "assistant",
+        top_k: int = 5,
+        score_threshold: float = 0.3,
+        max_chars: int = 12000,
+        return_with_sources: bool = False,
+    ) -> Union[str, Dict[str, Any]]:
+        """
+        Генерация ответа с учётом RAG-контекста
+        
+        Args:
+            question: Вопрос от пользователя.
+            system_prompt: Системные инструкции для модели.
+            mode: Режим работы промпта. Пресеты в llm_prompt.py.
+            top_k: Количество лучших чанков.
+            score_threshold: Порог отсечения по score.
+            max_chars: Лимит символов в контексте.
+            return_with_sources: Возвращать ли источники отдельно.
+        
+        Returns:
+            Если return_with_sources=False → готовый ответ (str).
+            Если return_with_sources=True → dict с полями:
+                - "answer": ответ LLM
+                - "sources": список источников
+                - "context_len": длина использованного контекста
+                - "mode": режим работы
+        """
         if not question or not isinstance(question, str):
             raise ValueError("question должен быть непустой строкой")
-        chunks = list(retrieved_chunks or [])
 
-        if score_threshold is not None:
-            filtered = []
-            for ch in chunks:
-                score = None
-                try:
-                    score = float(ch.get("meta", {}).get("score", None))
-                except Exception:
-                    score = None
-                if score is None or score <= score_threshold:
-                    filtered.append(ch)
-            chunks = filtered
+        # 1. Строим контекст и источники
+        retrieved_chunks = self.retrieve_chunks(question, n_results=top_k)
+        context, sources = self._build_context(
+            chunks=retrieved_chunks,
+            top_k=top_k,
+            score_threshold=score_threshold,
+            max_chars=max_chars
+        )
 
-        if k is not None and k > 0:
-            chunks = chunks[:k]
+        # 2. Сборка финального промпта
+        final_prompt = compose_prompt(
+            question=question,
+            context=context,
+            mode=mode
+        )
 
-        context_lines: List[str] = []
-        citations = []  # (audio_title, time_range_str)
-        total_len = 0
+        # 3. Генерация ответа моделью
+        raw_answer = self._llm(final_prompt).strip()
 
-        def _format_ts(seconds: float) -> str:
-            s = max(0, int(round(seconds)))
-            m, s = divmod(s, 60)
-            h, m = divmod(m, 60)
-            return f"{h:02d}:{m:02d}:{s:02d}" if h > 0 else f"{m:02d}:{s:02d}"
-
-        for idx, ch in enumerate(chunks, start=1):
-            text = str(ch.get("text", "")).strip()
-            meta = ch.get("meta", {}) or {}
-            audio_title = str(meta.get("audio_title", "unknown_audio")).strip()
-            ts = meta.get("timestamp_range", None)
-            if isinstance(ts, (list, tuple)) and len(ts) == 2:
-                t1 = _format_ts(float(ts[0]))
-                t2 = _format_ts(float(ts[1]))
-                time_range_str = f"{t1}-{t2}"
-            else:
-                time_range_str = "00:00-00:00"
-
-            snippet = " ".join(text.replace("\n", " ").replace("\r", " ").split())
-            candidate = f"[{idx}] {snippet}\n"
-            if total_len + len(candidate) > context_char_limit:
-                break
-            context_lines.append(candidate)
-            total_len += len(candidate)
-            citations.append((audio_title, time_range_str))
-
-        context_block = "\n".join(context_lines).strip()
-
-        parts: List[str] = []
-        if system_prompt:
-            parts.append(f"СИСТЕМНЫЕ ИНСТРУКЦИИ:\n{system_prompt}\n---")
-        parts.append("КОНТЕКСТ ИЗ БАЗЫ:")
-        parts.append(context_block if context_block else "(контекст не найден)")
-        parts.append("---")
-        parts.append("ЗАДАЧА: ответь на вопрос пользователя максимально точно и по сути, опираясь ТОЛЬКО на контекст выше.")
-        parts.append("Если ответа в контексте нет — честно скажи, что данных недостаточно.")
-        parts.append("В конце ответа добавь раздел 'Источники' со списком аудиофайлов и таймкодов из контекста.")
-        parts.append("---")
-        parts.append(f"ВОПРОС ПОЛЬЗОВАТЕЛЯ: {question}")
-        final_prompt = "\n".join(parts)
-
-        raw_answer = self.generate(final_prompt).strip()
-
-        if "Источники" not in raw_answer:
+        # 4. Добавляем "Источники", если это не return_with_sources=True
+        if sources and not return_with_sources:
             sources_lines = ["", "Источники:"]
             seen = set()
-            for (title, tr) in citations:
-                key = (title, tr)
-                if key in seen:
-                    continue
-                seen.add(key)
-                sources_lines.append(f"- {title} — {tr}")
-            raw_answer = raw_answer + "\n" + "\n".join(sources_lines)
+            for title, time_range in sources:
+                if (title, time_range) not in seen:
+                    sources_lines.append(f"- {title} — {time_range}")
+                    seen.add((title, time_range))
+            raw_answer += "\n" + "\n".join(sources_lines)
 
+        # 5. Возвращаем ответ
+        if return_with_sources:
+            return {
+                "answer": raw_answer,
+                "sources": [{"title": t, "time_range": tr} for t, tr in sources],
+                "context_len": len(context),
+                "mode": mode
+            }
+        
         return raw_answer
-
-
-if __name__ == "__main__":
-    client = LLMClient()
-    demo_chunks = [
-        {
-            "text": "В проекте используется модуль индексации аудио в ChromaDB...",
-            "meta": {"audio_title": "meeting_2024_09_01.wav", "timestamp_range": [12.3, 45.8], "score": 0.08},
-        },
-        {
-            "text": "Параметры подключения к Ollama берутся из .env: MODEL, URL_LLM...",
-            "meta": {"audio_title": "tech_sync.wav", "timestamp_range": [120.0, 165.0], "score": 0.12},
-        },
-    ]
-    system = "Ты — корпоративный ассистент, отвечаешь кратко и по делу, на русском."
-    answer = client.generate_with_retrieval(
-        question="Как подключаемся к локальной модели и где лежит конфигурация?",
-        retrieved_chunks=demo_chunks,
-        system_prompt=system,
-        k=2,
-        score_threshold=None,
-    )
-    print(answer)
