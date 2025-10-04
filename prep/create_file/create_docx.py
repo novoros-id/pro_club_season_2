@@ -115,36 +115,39 @@ def table_segments_time(json_file_path):
 
 def get_sections_from_llm(paragraphs, max_paragraphs_per_chunk=20):
     """
-    Разбивает список абзацев на куски (без разрыва абзацев),
-    отправляет каждый кусок в LLM для определения разделов,
-    возвращает общий список разделов: [{'title': ..., 'start_par': int, 'end_par': int}].
+    Разбивает список абзацев на куски и отправляет каждый в LLM для определения начала разделов.
+    Возвращает список разделов в виде:
+    [{'title': str, 'start_par': int}]
+    Границы разделов определяются как:
+      - от start_par текущего раздела
+      - до start_par следующего раздела (исключительно)
+      - или до конца текста, если это последний раздел.
+    Это гарантирует, что все абзацы будут включены без пропусков.
     """
     llm = OllamaLLM(model="gemma3:12b", temperature=0.1, base_url=URL_LLM, client_kwargs={'headers': headers})
 
-    sections = []
-    seen_titles = set()  # Чтобы избежать дублей
+    # Собираем все найденные точки начала разделов: {номер_абзаца: название}
+    section_starts = {}
 
-    # === Разбиваем абзацы на куски по max_paragraphs_per_chunk ===
+    # === Обрабатываем текст по частям ===
     for chunk_start in range(0, len(paragraphs), max_paragraphs_per_chunk):
         chunk = paragraphs[chunk_start:chunk_start + max_paragraphs_per_chunk]
-        
-        # Формируем текст куска с нумерацией (для привязки)
         numbered_chunk = "\n".join([f"[{chunk_start + i + 1}] {p}" for i, p in enumerate(chunk)])
-        
-        # Промт для LLM
+
         prompt = f"""
-        Проанализируй следующие пронумерованные абзацы и выдели в них логические разделы.
-        Укажи:
-        - Название раздела,
-        - Начальный и конечный номер абзаца (например, «Абзацы 3–5»).
+        Проанализируй следующие пронумерованные абзацы и определи, с каких абзацев начинаются новые логические разделы.
+        ВАЖНО:
+        - Первый абзац всегда считается началом первого раздела.
+        - Укажи ТОЛЬКО абзацы, с которых начинается новый раздел.
+        - Не указывай конечные номера — только начала.
 
-        Формат:
-        ---
-        **Название раздела**: Введение
-        **Абзацы**: 3–5
-        ---
+        Формат ответа — строго по одному на строку:
+        [Номер] [Название раздела]
 
-        Если раздел один: просто укажи его.
+        Пример:
+        1 Введение
+        5 Основной анализ
+        12 Заключение
 
         Текст:
         {numbered_chunk}
@@ -153,58 +156,46 @@ def get_sections_from_llm(paragraphs, max_paragraphs_per_chunk=20):
         try:
             response = llm.invoke(prompt)
         except Exception as e:
-            print(f"Ошибка при вызове LLM: {e}")
+            print(f"Ошибка при вызове LLM для чанка [{chunk_start+1}–{chunk_start+len(chunk)}]: {e}")
+            # Даже при ошибке считаем, что начало чанка — новая секция (на всякий случай)
+            first_in_chunk = chunk_start + 1
+            if first_in_chunk not in section_starts:
+                section_starts[first_in_chunk] = "Раздел"
             continue
 
-        # Парсим ответ
-        lines = response.splitlines()
+        # Парсим ответ: ищем строки вида "3 Название" или "[3] Название"
+        lines = response.strip().splitlines()
         for line in lines:
-            if "Абзацы" in line and "–" in line:
-                # Ищем "Абзацы 3–5"
-                match = re.search(r"Абзацы\D*(\d+)\D*–\D*(\d+)", line)
-                if match:
-                    start = int(match.group(1))
-                    end = int(match.group(2))
-                    # Проверяем, что номера в пределах текущего куска (защита от ошибок)
-                    if start < chunk_start + 1 or end > chunk_start + len(chunk):
-                        continue
+            line = line.strip()
+            if not line:
+                continue
+            # Поддерживаем форматы: "3 Название", "[3] Название", "3. Название"
+            match = re.match(r"[\[\(]?\s*(\d+)\s*[\]\)]?\s*(.+)", line)
+            if match:
+                try:
+                    par_num = int(match.group(1))
+                    title = match.group(2).strip(" \"'.")
+                    # Проверяем, что номер в пределах текущего чанка
+                    if chunk_start + 1 <= par_num <= chunk_start + len(chunk):
+                        section_starts[par_num] = title
+                except ValueError:
+                    continue
 
-                    # Ищем название раздела (5 строк выше) // в коде поменял на 1, почему на 5??? в итоге массив с пропусками (не все параграфы) Василишин
-                    title = "Раздел"
-                    for i in range(max(0, lines.index(line) - 1), lines.index(line)):
-                        if "Название раздела" in lines[i]:
-                            title_match = re.search(r":\s*(.+)", lines[i])
-                            if title_match:
-                                title = title_match.group(1).strip(" .\"'")
-                            break
+    # === Гарантируем, что первый абзац всегда начало раздела ===
+    if 1 not in section_starts:
+        section_starts[1] = "Введение"
 
-                    # Уникализация по названию
-                    if title not in seen_titles:
-                        sections.append({
-                            'title': title,
-                            'start_par': start,
-                            'end_par': end
-                        })
-                        seen_titles.add(title)
+    # === Преобразуем в отсортированный список разделов ===
+    sorted_starts = sorted(section_starts.items())  # [(1, "Введение"), (5, "Анализ"), ...]
 
-    # === Сортируем разделы по стартовому абзацу ===
-    sections.sort(key=lambda x: x['start_par'])
-    return sections #код ниже "портит" корректный массив. Василишин
-    # === Опционально: объединяем пересекающиеся разделы (на всякий случай)
-    #merged = []
-    #for section in sorted(sections, key=lambda x: x['start_par']):
-    #    if not merged:
-    #        merged.append(section)
-    #    else:
-    #        last = merged[-1]
-    #        if section['start_par'] <= last['end_par'] + 1:
-    #            # Пересекаются или идут подряд — объединяем?
-    #            # Или просто пропускаем? Пока пропускаем, чтобы не портить структуру
-    #            continue
-    #        else:
-    #            merged.append(section)
-    #
-    #return merged
+    sections = []
+    for i, (start_par, title) in enumerate(sorted_starts):
+        sections.append({
+            'title': title,
+            'start_par': start_par
+        })
+
+    return sections
 
 
 class create_docx:
@@ -280,7 +271,24 @@ class create_docx:
 
         # === Шаг 3: LLM разбивает на разделы (сохраняем оригинальные абзацы) ===
         print("Отправляем текст в LLM для разбиения на разделы...")
-        sections = get_sections_from_llm(paragraphs)  # Список: {title, start_par, end_par}
+        sections = get_sections_from_llm(paragraphs)
+
+        # Преобразуем в полные диапазоны без пропусков
+        if sections:
+            sections.sort(key=lambda x: x['start_par'])
+            starts = [s['start_par'] for s in sections]
+            starts.append(len(paragraphs) + 1)
+            full_sections = []
+            for i, sec in enumerate(sections):
+                full_sections.append({
+                    'title': sec['title'],
+                    'start_par': sec['start_par'],
+                    'end_par': min(starts[i + 1] - 1, len(paragraphs))
+                })
+            sections = full_sections
+        else:
+            # fallback: один раздел на весь текст
+            sections = [{'title': 'Документ', 'start_par': 1, 'end_par': len(paragraphs)}]
 
         # === Шаг 4: Формируем документ с разделами и картинками ===
         video_path = self.video_path
