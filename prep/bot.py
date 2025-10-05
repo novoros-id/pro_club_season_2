@@ -5,9 +5,14 @@ import logging
 from telegram import Update
 from telegram.ext import ApplicationBuilder, CommandHandler, MessageHandler, ContextTypes, filters
 from main import process_video
-from config import USER_FOLDER
+from dotenv import load_dotenv
+load_dotenv()
+USER_FOLDER = os.getenv("USER_FOLDER")
 from rag_llm.llm_client import LLMClient
 from telegram.helpers import escape_markdown
+import asyncio
+processing_lock = asyncio.Lock()
+
 
 # Логирование
 logging.basicConfig(
@@ -110,8 +115,7 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 # Запуск бота
 def run_bot():
-    from config import BOT_TOKEN
-
+    BOT_TOKEN = os.getenv("BOT_TOKEN")
     app = ApplicationBuilder().token(BOT_TOKEN).build()
 
     app.add_handler(CommandHandler("start", start))

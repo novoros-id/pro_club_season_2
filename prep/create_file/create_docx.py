@@ -6,9 +6,13 @@ import os
 import sys
 import json
 import re
-from config import URL_LLM
-from config import USER_LLM
-from config import PASSWORD_LLM
+
+from dotenv import load_dotenv, find_dotenv
+load_dotenv(find_dotenv())
+URL_LLM = os.getenv("URL_LLM")
+USER_LLM = os.getenv("USER_LLM")
+PASSWORD_LLM = os.getenv("PASSWORD_LLM") 
+MODEL = os.getenv("MODEL")
 
 # Добавляем родительский каталог в пути поиска модулей
 current_dir = os.path.dirname(os.path.abspath(__file__))
@@ -62,7 +66,7 @@ def create_prompt_for_sectioning(paragraphs):
 
 def image_is_required(paragraph):
 
-    llm = OllamaLLM(model="gemma3:12b", temperature=0.1, base_url=URL_LLM, client_kwargs={'headers': headers})
+    llm = OllamaLLM(model=MODEL, temperature=0.1, base_url=URL_LLM, client_kwargs={'headers': headers})
     prompt = "Тебе необходимо определить требует ли текст добавления картинки. " \
     "Необходимо ориентироваться на слова: показать, перейти, посмотрите, сейчас на экране. " \
     "Если нужна картинка ответь 1 если не нужна ответь 0. Только результат без пояснений. " \
@@ -124,7 +128,7 @@ def get_sections_from_llm(paragraphs, max_paragraphs_per_chunk=20):
       - или до конца текста, если это последний раздел.
     Это гарантирует, что все абзацы будут включены без пропусков.
     """
-    llm = OllamaLLM(model="gemma3:12b", temperature=0.1, base_url=URL_LLM, client_kwargs={'headers': headers})
+    llm = OllamaLLM(model=MODEL, temperature=0.1, base_url=URL_LLM, client_kwargs={'headers': headers})
 
     # Собираем все найденные точки начала разделов: {номер_абзаца: название}
     section_starts = {}
