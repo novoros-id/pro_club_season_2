@@ -35,7 +35,7 @@ class SynologyDownloader:
 
             page.on("response", handle_response)
             page.goto(self.video_page_url)
-            page.wait_for_timeout(3000)
+            page.wait_for_timeout(5000)
 
             # Пытаемся взять имя файла из meta
             meta_tag = page.locator('meta[property="og:title"]').first
@@ -44,7 +44,7 @@ class SynologyDownloader:
                 if content:
                     filename_holder["name"] = content.strip()
 
-            page.wait_for_timeout(5000)
+            page.wait_for_timeout(10000)
 
             # Если видео не найдено на основной странице — используем кнопку Download
             if not video_url_holder["url"]:

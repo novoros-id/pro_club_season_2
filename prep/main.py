@@ -5,7 +5,12 @@ from rag_db.rag_index_to_chroma_db import RagIndexer
 from create_file.create_docx import create_docx
 from download_audio_video.download_audio_video import SynologyDownloader, YandexDownloader
 from concurrent.futures import ThreadPoolExecutor
+from dotenv import load_dotenv
+load_dotenv()
+import os
 
+CREATE_RAG = os.getenv("CREATE_RAG")
+MODEL_WHISPER = os.getenv("MODEL_WHISPER")
 
 def process_video(url, folder):
 
@@ -32,19 +37,22 @@ def process_video(url, folder):
     
     # 2. Транскрибация аудиофайла
     #transcription = Transcription(model_name="antony66/whisper-large-v3-russian")
-    transcription = Transcription(model_name="large")
+    transcription = Transcription(model_name= MODEL_WHISPER)
     transcription_json = transcription.save_json(audio_file)
     print(f"[LOG] Transcription результат: {transcription_json}")
     transcription_docs = transcription.as_documents()
     print(f"[LOG] Transcription as_documents количество: {len(transcription_docs)}")
     transcription.unload()
-
     
     # 3. Создание DOCX из транскрипта
     class_create_docx = create_docx(transcription_json, video_file)
     paragraph = class_create_docx.get_docx()
     print(f"[LOG] create_docx результат: {paragraph}")
     
+    # 3.5 Проверка на тестовый режим
+    if CREATE_RAG == False:
+        print("[ERROR] Не создаем чанки, измените флаг чтобы создавать")
+        return paragraph
 
     # 4. Создание чанков из транскрипта
     if not transcription_docs:
@@ -62,7 +70,6 @@ def process_video(url, folder):
     indexer = RagIndexer()
     manifest = indexer.index(chunks)
     print(f"[LOG] RagIndexer manifest: {manifest}")
-
 
     return paragraph
 

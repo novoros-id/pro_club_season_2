@@ -4,9 +4,11 @@ import os
 from langchain_ollama import OllamaLLM
 
 import base64
-URL_LLM="http://188.225.36.45"
-USER_LLM="ollamaadmin"
-PASSWORD_LLM="@TLYInb%5T#c"
+from dotenv import load_dotenv, find_dotenv
+load_dotenv(find_dotenv())
+URL_LLM = os.getenv("URL_LLM")
+USER_LLM = os.getenv("USER_LLM")
+PASSWORD_LLM = os.getenv("PASSWORD_LLM")
 
 
 from docx.shared import Inches
