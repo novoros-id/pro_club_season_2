@@ -1,5 +1,0 @@
-BOT_TOKEN = ''
-USER_FOLDER = ""
-URL_LLM = ""
-USER_LLM=""
-PASSWORD_LLM=""
