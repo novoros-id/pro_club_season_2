@@ -39,7 +39,7 @@ class Transcription:
                 use_safetensors=True,
                 device_map="auto",  # автоматическое распределение
                 offload_folder="./offload",  # оффлокд на CPU при необходимости
-            ).to(device)
+            )#.to(device)
 
             # `return_timestamps="word"` → получаем тай‑коды каждого слова
             self.pipe = pipeline(
@@ -49,8 +49,7 @@ class Transcription:
                 feature_extractor=self.processor.feature_extractor,
                 return_timestamps="word",
                 chunk_length_s=30,
-                torch_dtype=dtype,
-                device=device,
+                torch_dtype=dtype
             )
         else:
             print("openai‑whisper")
@@ -203,7 +202,6 @@ class Transcription:
                             part_file,
                             generate_kwargs={
                                 "language": self.language,
-                                "return_timestamps": "word",
                                 "task": "transcribe"
                             }
                         )
@@ -266,7 +264,6 @@ class Transcription:
                     audio_path,
                     generate_kwargs={
                         "language": self.language,
-                        "return_timestamps": "word",
                         "task": "transcribe"
                     }
                 )
