@@ -19,9 +19,10 @@ class Transcription:
     PAUSE_MIN_DURATION_MS: int = 2000    # 2 секунды как минимальная пауза
     # --- /НОВОЕ ---
 
-    def __init__(self, model_name: str = "medium", language: str = "ru"):
+    def __init__(self, model_name: str = "medium", language: str = "ru", prompt: str= ""):
         self.language = language
         self._hf_backend = "/" in model_name  # признак Hugging Face модели
+        self.prompt = prompt
 
         if self._hf_backend:
             print("_hf_backend")
@@ -223,8 +224,9 @@ class Transcription:
                         print(f"[LOG] Начал транскрибацию части {i+1}")
                         result = self.model.transcribe(
                             part_file,
-                            language=self.language,
+                            language="ru",
                             word_timestamps=True,
+                            prompt=self.prompt
                         )
                     except Exception as e:
                         print(f"[ERROR] Ошибка в транскрибации части {i+1}: {type(e).__name__}: {e}")
@@ -281,8 +283,9 @@ class Transcription:
                 print(f"[LOG] Начал транскрибацию {datetime.datetime.now().isoformat()}")
                 result = self.model.transcribe(
                     audio_path,
-                    language=self.language,
+                    language="ru",
                     word_timestamps=True,
+                    prompt=self.prompt
                 )
             except Exception as e:
                 print(f"[ERROR] Ошибка в self.pipe: {type(e).__name__}: {e}")
