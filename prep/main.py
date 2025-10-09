@@ -36,8 +36,8 @@ def process_video(url, folder):
     print(f"[LOG] prepare_files результат: {files}")
     
     # 2. Транскрибация аудиофайла
-    #transcription = Transcription(model_name="antony66/whisper-large-v3-russian")
-    transcription = Transcription(model_name= MODEL_WHISPER)
+    prompt = "Техническая документация на русском языке. Используйте корректную пунктуацию, соблюдайте терминологию 1С, излагайте содержание техническим языком. Термины: 1С, НСИ, БИТ финанс, проведение документа, проводки, конфигурация, обработка, запрос, документ, справочник, модуль:"
+    transcription = Transcription(model_name= MODEL_WHISPER, prompt = prompt)
     transcription_json = transcription.save_json(audio_file)
     print(f"[LOG] Transcription результат: {transcription_json}")
     transcription_docs = transcription.as_documents()
@@ -50,7 +50,7 @@ def process_video(url, folder):
     print(f"[LOG] create_docx результат: {paragraph}")
     
     # 3.5 Проверка на тестовый режим
-    if CREATE_RAG == False:
+    if CREATE_RAG != "True":
         print("[ERROR] Не создаем чанки, измените флаг чтобы создавать")
         return paragraph
 
