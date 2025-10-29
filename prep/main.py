@@ -45,7 +45,7 @@ def process_video(url, folder):
     transcription.unload()
     
     # 3. Создание DOCX из транскрипта
-    class_create_docx = create_docx(transcription_json, video_file)
+    class_create_docx = create_docx(transcription_json, video_file, True)
     paragraph = class_create_docx.get_docx()
     print(f"[LOG] create_docx результат: {paragraph}")
     

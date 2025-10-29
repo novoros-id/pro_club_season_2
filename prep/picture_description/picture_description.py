@@ -63,8 +63,24 @@ class picture_description:
         if ret:
             # Получаем директорию из пути к видео
             video_dir = os.path.dirname(video_path)
-            output_image_path = os.path.join(video_dir, 'screenshot.png')
-            cv2.imwrite(output_image_path, frame)
+            
+            # --- Начало добавленного кода для уменьшения размера ---
+            import uuid
+            h, w = frame.shape[:2]
+            max_width = 1280  # максимальная ширина в пикселях
+            if w > max_width:
+                scale = max_width / w
+                new_w = max_width
+                new_h = int(h * scale)
+                frame = cv2.resize(frame, (new_w, new_h), interpolation=cv2.INTER_AREA)
+            
+            # Уникальное имя, чтобы избежать перезаписи
+            output_image_path = os.path.join(video_dir, f"screenshot_{uuid.uuid4().hex[:8]}.jpg")
+            
+            # Сохраняем как JPEG с качеством 90 (баланс размер/качество)
+            cv2.imwrite(output_image_path, frame, [cv2.IMWRITE_JPEG_QUALITY, 90])
+            # --- Конец добавленного кода ---
+            
             #print(f"Кадр сохранен как {output_image_path}")
             cap.release()
             return output_image_path
@@ -73,6 +89,19 @@ class picture_description:
             print(f"Текущая позиция в миллисекундах: {cap.get(cv2.CAP_PROP_POS_MSEC)}")
             cap.release()
             return None
+        # if ret:
+        #     # Получаем директорию из пути к видео
+        #     video_dir = os.path.dirname(video_path)
+        #     output_image_path = os.path.join(video_dir, 'screenshot.png')
+        #     cv2.imwrite(output_image_path, frame)
+        #     #print(f"Кадр сохранен как {output_image_path}")
+        #     cap.release()
+        #     return output_image_path
+        # else:
+        #     print("Не удалось извлечь кадр")
+        #     print(f"Текущая позиция в миллисекундах: {cap.get(cv2.CAP_PROP_POS_MSEC)}")
+        #     cap.release()
+        #     return None
         
     def description_frame_at_time(self, video_path, time_str):
 
