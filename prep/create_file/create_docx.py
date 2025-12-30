@@ -97,6 +97,17 @@ def table_segments_time(json_file_path):
 
     return rows
 
+def format_seconds_hhmmss(value):
+    """Конвертируем секунды (int/float/str) to HH:MM:SS."""
+    try:
+        total_seconds = int(float(value))
+    except Exception:
+        total_seconds = 0
+    hours = total_seconds // 3600
+    minutes = (total_seconds % 3600) // 60
+    seconds = total_seconds % 60
+    return f"{hours:02}:{minutes:02}:{seconds:02}"
+
 def get_sections_from_llm(paragraphs, max_paragraphs_per_chunk=20):
     """
     Разбивает список абзацев на куски и отправляет каждый в LLM для определения начала разделов.
@@ -262,8 +273,20 @@ class create_docx:
         #1
         segments_time = table_segments_time(json_file_path)
         class_text_to_paragraphs = text_to_paragraphs(full_text, segments_time)
-        paragraphs_table = class_text_to_paragraphs.get_text_to_paragraphs_table()        
+        paragraphs_table = class_text_to_paragraphs.get_text_to_paragraphs_table()
         paragraphs = [p[0] for p in paragraphs_table]
+
+        # Приблизительный старт абзаца: берём end предыдущего абзаца.
+        # Для первого абзаца считаем старт 0.
+        paragraphs_start_time = {}
+        prev_end = 0
+        for idx, row in enumerate(paragraphs_table, start=1):
+            try:
+                end_time = row[1]
+            except Exception:
+                end_time = prev_end
+            paragraphs_start_time[idx] = prev_end
+            prev_end = end_time
 
         paragraphs_time_scr = {}
 
@@ -288,9 +311,9 @@ class create_docx:
 
         if UseTextModify==True:
             print("Проводим улучшение текста...")
-            text_modifier = TextModify()
-            for i in range(len(paragraphs)):
-                paragraphs[i] = text_modifier.improve_text(paragraphs[i])
+            # text_modifier = TextModify()
+            # for i in range(len(paragraphs)):
+            #     paragraphs[i] = text_modifier.improve_text(paragraphs[i])
             
 
         # === Шаг 3: LLM разбивает на разделы (сохраняем оригинальные абзацы) ===
@@ -313,6 +336,18 @@ class create_docx:
         else:
             # fallback: один раздел на весь текст
             sections = [{'title': 'Документ', 'start_par': 1, 'end_par': len(paragraphs)}]
+
+        # === Вставляем оглавление с таймкодами ===
+        # Требование: один абзац "Таймкоды" со списком всех заголовков и времени начала.
+        doc.add_heading("Таймкоды", level=1)
+        p_tc = doc.add_paragraph()
+        for i, sec in enumerate(sections):
+            start_par = sec.get('start_par', 1)
+            start_time = paragraphs_start_time.get(start_par, 0)
+            line = f"{sec.get('title', 'Раздел')} — {format_seconds_hhmmss(start_time)}"
+            p_tc.add_run(line)
+            if i != len(sections) - 1:
+                p_tc.add_run().add_break()
 
         # === Шаг 4: Формируем документ с разделами и картинками ===
         video_path = self.video_path

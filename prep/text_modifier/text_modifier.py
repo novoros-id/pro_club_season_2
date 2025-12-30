@@ -1,9 +1,9 @@
 # text_modifier.py
 from langchain_ollama import OllamaLLM
-from langchain.callbacks.manager import CallbackManager
-from langchain.callbacks.streaming_stdout import StreamingStdOutCallbackHandler
-from langchain import PromptTemplate
-from langchain.schema import HumanMessage
+from langchain_core.callbacks.manager import CallbackManager
+from langchain_core.callbacks.streaming_stdout import StreamingStdOutCallbackHandler
+from langchain_core.prompts import PromptTemplate
+from langchain_core.messages import HumanMessage
 import os
 
 from dotenv import load_dotenv, find_dotenv

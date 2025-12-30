@@ -9,9 +9,8 @@
             "name": "Отладчик Python: Текущий файл с аргументами",
             "type": "debugpy",
             "request": "launch",
-            "program": "${workspaceFolder}/bot.py",
+            "program": "${workspaceFolder}/prep/bot.py",
             "console": "integratedTerminal",
-            "args": "${command:pickArgs}",
             "justMyCode": false,
             "subProcess": true
         }
