@@ -20,6 +20,8 @@ logging.basicConfig(
     level=logging.INFO
 )
 
+logging.getLogger("httpx").setLevel(logging.WARNING)
+
 # Проверка ссылки
 def is_url(text):
     url_regex = re.compile(
