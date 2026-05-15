@@ -37,3 +37,79 @@ class TextModify:
     def improve_text(self, full_text):
         prompt = self.prompt_template + " Вот текст для улучшения: " + full_text
         return self.llm.invoke(prompt)
+    
+    def clean_paragraph_with_context_window(self, paragraphs, current_index):
+        """
+        Очищает текущий абзац, используя контекст раздела, предыдущий и следующий абзацы.
+        
+        Args:
+            paragraphs: Список всех сырых абзацев раздела.
+            current_index: Индекс текущего абзаца в списке (0-based).
+            section_summary: Краткое содержание раздела (строка).
+            model, url, headers: Параметры подключения к Ollama.
+            
+        Returns:
+            Очищенный текст абзаца или пустую строку, если это мусор.
+        """
+        #llm = OllamaLLM(model=model, temperature=0.1, base_url=url, client_kwargs={'headers': headers})
+        
+        # 1. Получаем предыдущий контекст (последние 200 символов)
+        prev_context = ""
+        if current_index > 0:
+            # Берем предыдущий абзац. Если он был очищен ранее, лучше брать его очищенную версию,
+            # но здесь у нас доступ только к сырому списку. 
+            # Для простоты берем сырой, но можно передавать список уже очищенных.
+            prev_text = paragraphs[current_index - 1]
+            if len(prev_text) > 200:
+                prev_context = "... " + prev_text[-200:]
+            else:
+                prev_context = prev_text
+
+        # 2. Получаем следующий контекст (первые 200 символов)
+        next_context = ""
+        if current_index < len(paragraphs) - 1:
+            next_text = paragraphs[current_index + 1]
+            if len(next_text) > 200:
+                next_context = next_text[:200] + " ..."
+            else:
+                next_context = next_text
+                
+        current_text = paragraphs[current_index]
+
+        prompt = f"""
+        Ты — редактор технической документации. Твоя задача — очистить транскрибацию от шума и привести её к читаемому виду.
+        
+        ПРЕДЫДУЩИЙ ТЕКСТ (для связности):
+        "{prev_context}"
+
+        СЛЕДУЮЩИЙ ТЕКСТ (для понимания продолжения):
+        "{next_context}"
+
+        ТЕКУЩИЙ ФРАГМЕНТ (требует обработки):
+        "{current_text}"
+
+        ИНСТРУКЦИИ:
+        1. Если текущий фрагмент — это явный мусор (набор символов OCR, английский текст вроде "I'm sorry", бессвязные слова), верни ТОЛЬКО слово: EMPTY
+        2. Если фрагмент нормальный:
+        - Исправь ошибки распознавания.
+        - Удали слова-паразиты ("эээ", "ну", "как бы").
+        - Сохрани технический смысл и термины.
+        - Обеспечь логическую связку с предыдущим текстом.
+        - Верни ТОЛЬКО готовый текст на русском языке. Без пояснений.
+        
+        Результат:
+        """
+        
+        try:
+            response = self.llm.invoke(prompt)
+            result = response.strip()
+            
+            # Проверка на маркер пустоты
+            if result.upper() == "EMPTY":
+                return ""
+                
+            return result
+            
+        except Exception as e:
+            print(f"Ошибка LLM при очистке абзаца {current_index}: {e}")
+            return current_text # В случае ошибки возвращаем оригинал, чтобы не терять данные
