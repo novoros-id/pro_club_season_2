@@ -31,6 +31,7 @@ import base64
 encoded_credentials = base64.b64encode(f"{USER_LLM}:{PASSWORD_LLM}".encode()).decode()
 headers = {'Authorization': f'Basic {encoded_credentials}'}
 
+import re
 
 def image_is_required(paragraph):
 
@@ -97,128 +98,153 @@ def table_segments_time(json_file_path):
 
     return rows
 
-def get_sections_from_llm(paragraphs, max_paragraphs_per_chunk=20):
+def format_seconds_hhmmss(value):
+    """Конвертируем секунды (int/float/str) to HH:MM:SS."""
+    try:
+        total_seconds = int(float(value))
+    except Exception:
+        total_seconds = 0
+    hours = total_seconds // 3600
+    minutes = (total_seconds % 3600) // 60
+    seconds = total_seconds % 60
+    return f"{hours:02}:{minutes:02}:{seconds:02}"
+
+def get_sections_from_llm(paragraphs, max_paragraphs_per_chunk=25, overlap=5):
     """
-    Разбивает список абзацев на куски и отправляет каждый в LLM для определения начала разделов.
-    Возвращает список разделов в виде:
-    [{'title': str, 'start_par': int}]
-    Границы разделов определяются как:
-      - от start_par текущего раздела
-      - до start_par следующего раздела (исключительно)
-      - или до конца текста, если это последний раздел.
-    Это гарантирует, что все абзацы будут включены без пропусков.
+    Разбивает текст на логические разделы с учетом контекста и пост-обработкой.
     """
     llm = OllamaLLM(model=MODEL, temperature=0.1, base_url=URL_LLM, client_kwargs={'headers': headers})
+    
+    section_starts = {} # {par_num: title}
+    total_pars = len(paragraphs)
+    
+    # Если текст короткий, обрабатываем целиком для лучшего качества
+    if total_pars <= max_paragraphs_per_chunk:
+        chunks = [(0, total_pars)]
+    else:
+        # Генерируем чанки с перекрытием
+        chunks = []
+        start_idx = 0
+        while start_idx < total_pars:
+            end_idx = min(start_idx + max_paragraphs_per_chunk, total_pars)
+            chunks.append((start_idx, end_idx))
+            # Сдвигаем start_idx с учетом overlap, но не назад
+            next_start = end_idx - overlap
+            if next_start <= start_idx: 
+                break # Защита от бесконечного цикла, если overlap слишком большой
+            start_idx = next_start
+            
+            # Если это последний кусок, просто берем остаток
+            if end_idx == total_pars:
+                break
 
-    # Собираем все найденные точки начала разделов: {номер_абзаца: название}
-    section_starts = {}
+    print(f"Разбиение на {len(chunks)} чанков для анализа структуры...")
 
-    # === Обрабатываем текст по частям ===
-    for chunk_start in range(0, len(paragraphs), max_paragraphs_per_chunk):
-        chunk = paragraphs[chunk_start:chunk_start + max_paragraphs_per_chunk]
-        numbered_chunk = "\n".join([f"[{chunk_start + i + 1}] {p}" for i, p in enumerate(chunk)])
-
-        # prompt = f"""
-        # Проанализируй следующие пронумерованные абзацы и определи, с каких абзацев начинаются новые логические разделы.
-        # ВАЖНО:
-        # - Первый абзац всегда считается началом первого раздела.
-        # - Укажи ТОЛЬКО абзацы, с которых начинается новый раздел.
-        # - Не указывай конечные номера — только начала.
-
-        # Формат ответа — строго по одному на строку:
-        # [Номер] [Название раздела]
-
-        # Пример:
-        # 1 Введение
-        # 5 Основной анализ
-        # 12 Заключение
-
-        # Текст:
-        # {numbered_chunk}
-        # """
+    for chunk_idx, (c_start, c_end) in enumerate(chunks):
+        chunk = paragraphs[c_start:c_end]
+        
+        # Нумерация для промпта должна быть понятной LLM
+        # Используем глобальные номера абзацев (1-based)
+        numbered_text = "\n".join([f"[{i + 1}] {p}" for i, p in enumerate(chunk, start=c_start)])
+        
         prompt = f"""
-        Ты — эксперт по технической документации. Проанализируй пронумерованные абзацы инструкции и определи, с каких абзацев начинаются **новые логические разделы**.
-
-        Разделы в инструкциях обычно включают:
-        - Введение / Обзор
-        - Требования / Предварительные условия
-        - Пошаговые действия (например: «Шаг 1», «Настройка», «Запуск»)
-        - Проверка результата / Верификация
-        - Устранение неполадок
-        - Заключение / Дополнительные рекомендации
-
-        ВАЖНО:
-        - Первый абзац ВСЕГДА является началом первого раздела.
-        - Раздел начинается, если:
-        • Тема или задача меняется;
-        • Начинается новый этап инструкции;
-        • Появляется подзаголовок по смыслу (даже если он не выделен явно).
-        - Не выдумывай разделы — опирайся только на содержание текста.
-        - Не включай промежуточные пояснения, примеры или примечания как отдельные разделы, если они не начинают новую тему.
-
-        Формат ответа — строго по одной строке на раздел:
-        <номер_абзаца> <название_раздела>
-
-        Требования к формату:
-        - Номер — целое число без скобок.
-        - Название — краткое (3–6 слов), отражающее суть раздела, в стиле технической инструкции.
-        - Никаких дополнительных символов, пояснений или пустых строк.
-
-        Пример корректного ответа:
-        1 Введение
-        4 Предварительные требования
-        7 Шаг 1: Запуск приложения
-        12 Шаг 2: Настройка параметров
-        18 Проверка результата
-        22 Заключение
-
-        Текст:
-        {numbered_chunk}
+        Ты — старший технический писатель. Проанализируй фрагмент инструкции (абзацы [{c_start+1} - {c_end}]).
+        Твоя задача: найти начала КРУПНЫХ логических разделов.
+        
+        СТРОГИЕ ПРАВИЛА:
+        1. Не создавай разделы для коротких фраз-связок ("Давайте начнем", "Как видно на экране").
+        2. Раздел должен объединять минимум 2-3 абзаца или описывать законченный этап (например, "Настройка параметров", а не "Поле Имя").
+        3. Если первый абзац фрагмента является продолжением предыдущей мысли, НЕ начинай новый раздел.
+        4. Название раздела должно быть существительным или краткой фразой (макс 5 слов), отражающей суть блока.
+        5. НЕ используй слово "Введение", если текст не является вступлением ко всему документу. Называй раздел по смыслу (например, "Подготовка данных", "Основной процесс").
+        
+        Формат ответа (только строки вида: НОМЕР НАЗВАНИЕ):
+        1 Начальная конфигурация
+        5 Заполнение основных полей
+        
+        Текст фрагмента:
+        {numbered_text}
         """
-
+        
         try:
             response = llm.invoke(prompt)
         except Exception as e:
-            print(f"Ошибка при вызове LLM для чанка [{chunk_start+1}–{chunk_start+len(chunk)}]: {e}")
-            # Даже при ошибке считаем, что начало чанка — новая секция (на всякий случай)
-            first_in_chunk = chunk_start + 1
-            if first_in_chunk not in section_starts:
-                section_starts[first_in_chunk] = "Раздел"
+            print(f"Ошибка LLM в чанке {chunk_idx}: {e}")
             continue
-
-        # Парсим ответ: ищем строки вида "3 Название" или "[3] Название"
+            
+        # Парсинг ответа
         lines = response.strip().splitlines()
         for line in lines:
-            line = line.strip()
-            if not line:
-                continue
-            # Поддерживаем форматы: "3 Название", "[3] Название", "3. Название"
-            match = re.match(r"[\[\(]?\s*(\d+)\s*[\]\)]?\s*(.+)", line)
+            # Очистка от markdown символов (*, #, -, >)
+            clean_line = re.sub(r'[*_#`>\-]', '', line).strip()
+            if not clean_line: continue
+            
+            # Ищем паттерн: Число в начале строки, затем текст
+            match = re.match(r"^\s*(\d+)\s+(.+)", clean_line)
             if match:
                 try:
                     par_num = int(match.group(1))
-                    title = match.group(2).strip(" \"'.")
-                    # Проверяем, что номер в пределах текущего чанка
-                    if chunk_start + 1 <= par_num <= chunk_start + len(chunk):
-                        section_starts[par_num] = title
+                    title = match.group(2).strip(" .,:;\"'")
+                    
+                    # Проверка: номер должен быть в пределах текущего чанка
+                    # (c_start соответствует индексу 0 в chunk, но в нумерации это c_start+1)
+                    if (c_start + 1) <= par_num <= c_end:
+                        # Если такой ключ уже есть, перезаписываем только если этот чанк "позже" (для overlap)
+                        # Или оставляем первый найденный вариант. 
+                        # Лучше оставлять первый, чтобы не дробить.
+                        if par_num not in section_starts:
+                            section_starts[par_num] = title
                 except ValueError:
                     continue
 
-    # === Гарантируем, что первый абзац всегда начало раздела ===
-    # if 1 not in section_starts:
-    #     section_starts[1] = "Введение"
+    # === Пост-обработка: Сборка и фильтрация ===
+    if not section_starts:
+        return [{'title': 'Основной текст', 'start_par': 1, 'end_par': total_pars}]
 
-    # === Преобразуем в отсортированный список разделов ===
-    sorted_starts = sorted(section_starts.items())  # [(1, "Введение"), (5, "Анализ"), ...]
-
-    sections = []
-    for i, (start_par, title) in enumerate(sorted_starts):
-        sections.append({
+    # Сортируем по номерам абзацев
+    sorted_items = sorted(section_starts.items())
+    
+    # Формируем черновые разделы с диапазонами
+    raw_sections = []
+    for i, (start_par, title) in enumerate(sorted_items):
+        if i + 1 < len(sorted_items):
+            end_par = sorted_items[i+1][0] - 1
+        else:
+            end_par = total_pars
+        
+        raw_sections.append({
             'title': title,
-            'start_par': start_par
+            'start_par': start_par,
+            'end_par': end_par,
+            'length': end_par - start_par + 1
         })
 
-    return sections
+    # === Фильтрация "мусорных" мелких разделов ===
+    final_sections = []
+    min_length = 2 # Минимальная длина раздела в абзацах
+    
+    for sec in raw_sections:
+        if sec['length'] < min_length:
+            # Если раздел слишком короткий, присоединяем его к ПРЕДЫДУЩЕМУ (если он есть)
+            # Это предотвращает создание заголовков для однострочных реплик
+            if final_sections:
+                prev_sec = final_sections[-1]
+                prev_sec['end_par'] = sec['end_par']
+                prev_sec['length'] = prev_sec['end_par'] - prev_sec['start_par'] + 1
+                # Опционально: можно обновить название, если текущее более информативно
+                # но чаще всего лучше сохранить название крупного блока
+            else:
+                # Если это самый первый раздел и он короткий, оставляем как есть
+                # или присоединяем к следующему (сложнее реализовать, оставим пока так)
+                final_sections.append(sec)
+        else:
+            final_sections.append(sec)
+            
+    # Удаляем вспомогательное поле length перед возвратом
+    for sec in final_sections:
+        sec.pop('length', None)
+        
+    return final_sections
 
 
 class create_docx:
@@ -262,8 +288,20 @@ class create_docx:
         #1
         segments_time = table_segments_time(json_file_path)
         class_text_to_paragraphs = text_to_paragraphs(full_text, segments_time)
-        paragraphs_table = class_text_to_paragraphs.get_text_to_paragraphs_table()        
+        paragraphs_table = class_text_to_paragraphs.get_text_to_paragraphs_table()
         paragraphs = [p[0] for p in paragraphs_table]
+
+        # Приблизительный старт абзаца: берём end предыдущего абзаца.
+        # Для первого абзаца считаем старт 0.
+        paragraphs_start_time = {}
+        prev_end = 0
+        for idx, row in enumerate(paragraphs_table, start=1):
+            try:
+                end_time = row[1]
+            except Exception:
+                end_time = prev_end
+            paragraphs_start_time[idx] = prev_end
+            prev_end = end_time
 
         paragraphs_time_scr = {}
 
@@ -290,7 +328,8 @@ class create_docx:
             print("Проводим улучшение текста...")
             text_modifier = TextModify()
             for i in range(len(paragraphs)):
-                paragraphs[i] = text_modifier.improve_text(paragraphs[i])
+                # paragraphs[i] = text_modifier.improve_text(paragraphs[i])
+                paragraphs[i] = text_modifier.clean_paragraph_with_context_window(paragraphs, i)
             
 
         # === Шаг 3: LLM разбивает на разделы (сохраняем оригинальные абзацы) ===
@@ -313,6 +352,18 @@ class create_docx:
         else:
             # fallback: один раздел на весь текст
             sections = [{'title': 'Документ', 'start_par': 1, 'end_par': len(paragraphs)}]
+
+        # === Вставляем оглавление с таймкодами ===
+        # Требование: один абзац "Таймкоды" со списком всех заголовков и времени начала.
+        doc.add_heading("Таймкоды", level=1)
+        p_tc = doc.add_paragraph()
+        for i, sec in enumerate(sections):
+            start_par = sec.get('start_par', 1)
+            start_time = paragraphs_start_time.get(start_par, 0)
+            line = f"{sec.get('title', 'Раздел')} — {format_seconds_hhmmss(start_time)}"
+            p_tc.add_run(line)
+            if i != len(sections) - 1:
+                p_tc.add_run().add_break()
 
         # === Шаг 4: Формируем документ с разделами и картинками ===
         video_path = self.video_path
