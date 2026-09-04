@@ -2,9 +2,30 @@ import os
 import uuid
 import logging
 import re
-from flask import Flask, render_template_string, request, send_file
+from pathlib import Path
+try:
+    from flask import Flask, render_template_string, request, send_file
+except ImportError:  # Keep the entry point importable for config/health checks.
+    class Flask:
+        def __init__(self, *_args, **_kwargs):
+            pass
+
+        def route(self, *_args, **_kwargs):
+            return lambda function: function
+
+        def run(self, *_args, **_kwargs):
+            raise RuntimeError("Для запуска web UI установите зависимости из prep/requirements.txt.")
+
+    request = None
+
+    def render_template_string(*_args, **_kwargs):
+        raise RuntimeError("Flask не установлен.")
+
+    def send_file(*_args, **_kwargs):
+        raise RuntimeError("Flask не установлен.")
+
 from dotenv import load_dotenv
-from main import process_video
+from main import get_video_source_mode, process_local_video, process_video
 
 load_dotenv()
 
@@ -12,7 +33,9 @@ load_dotenv()
 USER_FOLDER = os.getenv("USER_FOLDER")
 if not USER_FOLDER:
     USER_FOLDER = "./user_data"
-    os.makedirs(USER_FOLDER, exist_ok=True)
+os.makedirs(USER_FOLDER, exist_ok=True)
+
+ALLOWED_VIDEO_EXTENSIONS = {".mp4", ".mov", ".mkv", ".avi", ".webm", ".m4v"}
 
 app = Flask(__name__)
 
@@ -61,7 +84,7 @@ HTML_TEMPLATE = """
             border-left: 5px solid #2196f3;
         }
 
-        input[type="url"] { 
+        input[type="url"], select {
             width: 100%; 
             padding: 15px; 
             margin-bottom: 20px; 
@@ -116,6 +139,7 @@ HTML_TEMPLATE = """
             font-weight: bold;
         }
         .download-link:hover { background-color: #1b5e20; }
+
     </style>
 </head>
 <body>
@@ -124,16 +148,33 @@ HTML_TEMPLATE = """
 
     <div class="container">
         <h3>Обработка видео</h3>
-        
-        <!-- Ваш требуемый текст -->
+
+        {% if source_mode == "local" %}
+        <div class="info-text">
+            Выберите видео из настроенного локального каталога. Исходный файл останется без изменений.
+        </div>
+        {% if local_videos %}
+        <form action="/api/local-video" method="POST">
+            <select name="local_video" required>
+                <option value="" selected disabled>Выберите видео</option>
+                {% for video in local_videos %}
+                <option value="{{ video }}">{{ video }}</option>
+                {% endfor %}
+            </select>
+            <button type="submit" class="action-btn">Обработать локальное видео</button>
+        </form>
+        {% elif not video_error %}
+        <div class="result-box error">❌ В LOCAL_VIDEO_DIR нет поддерживаемых видеофайлов.</div>
+        {% endif %}
+        {% elif source_mode == "url" %}
         <div class="info-text">
             Вставьте ссылку на Synology Drive или Яндекс Диск. Не забудьте расшарить файл.
         </div>
-        
         <form action="/api/video" method="POST">
             <input type="url" name="video_url" placeholder="https://..." required>
-            <button type="submit" class="action-btn">Начать обработку</button>
+            <button type="submit" class="action-btn">Обработать по ссылке</button>
         </form>
+        {% endif %}
 
         {% if video_error %}
         <div class="result-box error">
@@ -161,33 +202,135 @@ LAST_GENERATED_FILE = None
 
 # --- Маршруты ---
 
+
+def get_local_video_dir(value=None):
+    """Resolve and validate LOCAL_VIDEO_DIR."""
+    configured = os.getenv("LOCAL_VIDEO_DIR", "") if value is None else value
+    configured = os.fspath(configured).strip() if configured else ""
+    if not configured:
+        raise ValueError("Для режима local укажите LOCAL_VIDEO_DIR.")
+    directory = Path(configured).expanduser()
+    try:
+        directory = directory.resolve(strict=True)
+    except (FileNotFoundError, OSError) as exc:
+        raise ValueError("Каталог LOCAL_VIDEO_DIR не найден или недоступен.") from exc
+    if not directory.is_dir():
+        raise ValueError("LOCAL_VIDEO_DIR должен указывать на каталог.")
+    return directory
+
+
+def list_local_videos(directory):
+    """List supported files below the configured directory as relative paths."""
+    try:
+        root = Path(directory).resolve(strict=True)
+        if not root.is_dir():
+            raise ValueError("LOCAL_VIDEO_DIR должен указывать на каталог.")
+        videos = []
+        for path in root.rglob("*"):
+            if not path.is_file() or path.suffix.lower() not in ALLOWED_VIDEO_EXTENSIONS:
+                continue
+            resolved_path = path.resolve(strict=True)
+            try:
+                resolved_path.relative_to(root)
+            except ValueError:
+                continue
+            videos.append(path.relative_to(root).as_posix())
+    except (FileNotFoundError, OSError) as exc:
+        raise ValueError("Не удалось прочитать LOCAL_VIDEO_DIR.") from exc
+    return sorted(videos, key=str.casefold)
+
+
+def resolve_local_video_path(directory, selected_file):
+    """Resolve a UI selection while preventing absolute paths and traversal."""
+    if not selected_file or not selected_file.strip():
+        raise ValueError("Выберите видеофайл из списка.")
+
+    root = Path(directory).resolve(strict=True)
+    relative_path = Path(selected_file.strip())
+    if relative_path.is_absolute():
+        raise ValueError("Выбранный файл находится вне LOCAL_VIDEO_DIR.")
+    try:
+        candidate = (root / relative_path).resolve(strict=False)
+        candidate.relative_to(root)
+    except ValueError:
+        raise ValueError("Выбранный файл находится вне LOCAL_VIDEO_DIR.") from None
+    except OSError:
+        raise ValueError("Не удалось проверить выбранный видеофайл.") from None
+
+    try:
+        if not candidate.is_file():
+            raise ValueError("Выбранный видеофайл не найден или это не файл.")
+    except OSError:
+        raise ValueError("Выбранный видеофайл недоступен.") from None
+    if candidate.suffix.lower() not in ALLOWED_VIDEO_EXTENSIONS:
+        allowed = ", ".join(sorted(ALLOWED_VIDEO_EXTENSIONS))
+        raise ValueError(f"Неподдерживаемый формат видео. Допустимые расширения: {allowed}")
+    return candidate
+
+
+def _page_context(*, error=None, filename=None):
+    try:
+        source_mode = get_video_source_mode()
+        local_videos = list_local_videos(get_local_video_dir()) if source_mode == "local" else []
+    except ValueError as exc:
+        source_mode = None
+        local_videos = []
+        error = error or str(exc)
+    return {
+        "source_mode": source_mode,
+        "local_videos": local_videos,
+        "video_error": error,
+        "video_success": filename is not None,
+        "video_filename": filename,
+    }
+
+
+def _render_result(*, error=None, filename=None):
+    return render_template_string(
+        HTML_TEMPLATE,
+        **_page_context(error=error, filename=filename),
+    )
+
 @app.route('/', methods=['GET'])
 def index():
-    return render_template_string(
-        HTML_TEMPLATE, 
-        video_error=None, 
-        video_success=False, 
-        video_filename=None
-    )
+    return _render_result()
+
+
+@app.route('/api/local-video', methods=['POST'])
+def api_local_video():
+    global LAST_GENERATED_FILE
+    try:
+        if get_video_source_mode() != "local":
+            raise ValueError("Локальная обработка отключена: установите VIDEO_SOURCE_MODE=local.")
+        source_path = resolve_local_video_path(
+            get_local_video_dir(), request.form.get("local_video", "")
+        )
+        logging.info("Начало обработки локального видео: %s", source_path.name)
+        docx_path = process_local_video(source_path, USER_FOLDER)
+        result_filename = os.path.basename(docx_path)
+        LAST_GENERATED_FILE = docx_path
+        logging.info("Обработка завершена. Файл: %s", result_filename)
+        return _render_result(filename=result_filename)
+    except Exception as e:
+        logging.error("Local Video Processing Error: %s", e, exc_info=True)
+        status_code = 422 if isinstance(e, ValueError) else 500
+        return _render_result(error=f"Произошла ошибка при обработке: {e}"), status_code
 
 @app.route('/api/video', methods=['POST'])
 def api_video():
     global LAST_GENERATED_FILE
-    url = request.form.get('video_url', '').strip()
-    
-    if not url or not re.compile(r'https?://').match(url):
-        return render_template_string(
-            HTML_TEMPLATE, 
-            video_error="Некорректная ссылка. Пожалуйста, проверьте URL.",
-            video_success=False
-        )
-
-    unique_id = str(uuid.uuid4())[:8]
-    folder_name = f"web_user_{unique_id}"
-    folder_path = os.path.join(USER_FOLDER, folder_name)
-    os.makedirs(folder_path, exist_ok=True)
-
     try:
+        if get_video_source_mode() != "url":
+            raise ValueError("Обработка ссылок отключена: установите VIDEO_SOURCE_MODE=url.")
+        url = request.form.get('video_url', '').strip()
+        if not url or not re.compile(r'https?://').match(url):
+            raise ValueError("Некорректная ссылка. Пожалуйста, проверьте URL.")
+
+        unique_id = str(uuid.uuid4())[:8]
+        folder_name = f"web_user_{unique_id}"
+        folder_path = os.path.join(USER_FOLDER, folder_name)
+        os.makedirs(folder_path, exist_ok=True)
+
         logging.info(f"Начало обработки видео: {url}")
         docx_path = process_video(url, folder_path)
         filename = os.path.basename(docx_path)
@@ -197,20 +340,12 @@ def api_video():
         
         logging.info(f"Обработка завершена. Файл: {filename}")
 
-        return render_template_string(
-            HTML_TEMPLATE, 
-            video_error=None, 
-            video_success=True, 
-            video_filename=filename
-        )
+        return _render_result(filename=filename)
 
     except Exception as e:
         logging.error(f"Video Processing Error: {e}", exc_info=True)
-        return render_template_string(
-            HTML_TEMPLATE, 
-            video_error=f"Произошла ошибка при обработке: {str(e)}",
-            video_success=False
-        )
+        status_code = 422 if isinstance(e, ValueError) else 500
+        return _render_result(error=f"Произошла ошибка при обработке: {str(e)}"), status_code
 
 @app.route('/download/<filename>')
 def download_file(filename):

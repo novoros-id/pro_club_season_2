@@ -3,6 +3,8 @@ __pycache__/
 .DS_Store
 *.log
 .env
+.env_bak
+*.env.bak
 
 # Byte-compiled / optimized / DLL files
 __pycache__/
@@ -182,6 +184,10 @@ cython_debug/
 # Ignore test samples
 test_file/data/sample.json
 test_file/data/sample.wav
+prep/test_data/
+prep/test_output/
+prep/user_data/
 
 # Ignore config.py
 config.py
+!prep/model_api/config.py
