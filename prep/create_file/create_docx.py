@@ -20,6 +20,9 @@ from text_modifier.text_modifier import TextModify
 from model_api import get_default_client
 
 
+DEFAULT_PARAGRAPH_BATCH_SIZE = 15
+
+
 def parse_json_response(response):
     if not isinstance(response, str):
         raise ValueError("Ответ модели должен быть строкой.")
@@ -59,6 +62,140 @@ def image_is_required(paragraph, client=None):
     except Exception as e:
         print(f"Ошибка MWS при определении необходимости кадра: {e}")
         return False
+
+
+def _parse_paragraph_batch_response(response, expected_numbers, modify_text):
+    payload = parse_json_response(response)
+    rows = payload.get("paragraphs") if isinstance(payload, dict) else None
+    if not isinstance(rows, list):
+        raise ValueError("Ответ не содержит список paragraphs.")
+
+    expected = set(expected_numbers)
+    parsed = {}
+    for row in rows:
+        if not isinstance(row, dict):
+            raise ValueError("Элемент paragraphs должен быть объектом.")
+        number = row.get("number")
+        if isinstance(number, bool) or not isinstance(number, int):
+            raise ValueError("number должен быть целым числом.")
+        if number not in expected or number in parsed:
+            raise ValueError("Ответ содержит неизвестный или повторяющийся number.")
+        image_required = row.get("image_required")
+        if not isinstance(image_required, bool):
+            raise ValueError("image_required должен быть boolean.")
+        clean_text = row.get("clean_text")
+        if modify_text and not isinstance(clean_text, str):
+            raise ValueError("clean_text должен быть строкой.")
+        parsed[number] = {
+            "number": number,
+            "clean_text": clean_text if modify_text else None,
+            "image_required": image_required,
+        }
+
+    if set(parsed) != expected:
+        missing = sorted(expected - set(parsed))
+        raise ValueError(f"Ответ не содержит абзацы: {missing}")
+    return [parsed[number] for number in expected_numbers]
+
+
+def _fallback_paragraph_batch(paragraphs, numbers, modify_text, client):
+    """Preserve the former per-paragraph behavior for one failed batch only."""
+    modifier = TextModify(client=client) if modify_text else None
+    results = []
+    for number in numbers:
+        index = number - 1
+        original = paragraphs[index]
+        clean_text = (
+            modifier.clean_paragraph_with_context_window(paragraphs, index)
+            if modifier
+            else original
+        )
+        results.append({
+            "number": number,
+            "clean_text": clean_text,
+            "image_required": image_is_required(original, client=client),
+        })
+    return results
+
+
+def process_paragraphs_in_batches(paragraphs, modify_text=True, client=None, batch_size=None):
+    """Clean text and decide on images with one structured LLM call per batch."""
+    client = client or get_default_client()
+    if batch_size is None:
+        configured = getattr(
+            getattr(client, "config", None),
+            "paragraph_processing_batch_size",
+            DEFAULT_PARAGRAPH_BATCH_SIZE,
+        )
+        batch_size = configured if isinstance(configured, int) else DEFAULT_PARAGRAPH_BATCH_SIZE
+    if batch_size <= 0:
+        raise ValueError("batch_size должен быть положительным.")
+
+    results = []
+    for offset in range(0, len(paragraphs), batch_size):
+        end = min(offset + batch_size, len(paragraphs))
+        numbers = list(range(offset + 1, end + 1))
+        items = []
+        for number in numbers:
+            index = number - 1
+            previous = paragraphs[index - 1] if index > 0 else ""
+            following = paragraphs[index + 1] if index + 1 < len(paragraphs) else ""
+            items.append({
+                "number": number,
+                "text": paragraphs[index],
+                "previous_context": previous[-200:],
+                "next_context": following[:200],
+            })
+
+        clean_instruction = (
+            "Для clean_text исправь распознавание и грамматику, удали слова-паразиты, "
+            "сохрани все технические сведения и связность. Контекст используй только "
+            "для понимания текущего абзаца. Для явного мусора верни пустую строку."
+            if modify_text
+            else "Поле clean_text не возвращай: редактирование текста отключено."
+        )
+        schema = (
+            '{"paragraphs":[{"number":1,"clean_text":"...",'
+            '"image_required":true}]}'
+            if modify_text
+            else '{"paragraphs":[{"number":1,"image_required":true}]}'
+        )
+        prompt = f"""
+Ты обрабатываешь пакет абзацев технической документации. Для каждого входного number
+верни ровно один результат с тем же number. Не объединяй, не удаляй и не переставляй
+абзацы. {clean_instruction}
+
+image_required оценивай по исходному полю text (не по clean_text) по прежним правилам:
+true для конкретных элементов интерфейса, пошаговых действий пользователя, визуального
+результата или указания расположения; иначе false. Соседний контекст не должен сам по
+себе делать изображение обязательным для текущего абзаца.
+
+Верни только валидный JSON вида:
+{schema}
+
+Входные абзацы:
+{json.dumps(items, ensure_ascii=False)}
+"""
+        try:
+            response = client.generate_text(prompt, temperature=0.1)
+            batch_results = _parse_paragraph_batch_response(
+                response, numbers, modify_text
+            )
+            if not modify_text:
+                for row in batch_results:
+                    row["clean_text"] = paragraphs[row["number"] - 1]
+        except Exception as exc:
+            print(
+                f"Ошибка пакетной обработки абзацев {numbers[0]}–{numbers[-1]}: {exc}. "
+                "Используется поабзацный fallback."
+            )
+            batch_results = _fallback_paragraph_batch(
+                paragraphs, numbers, modify_text, client
+            )
+        results.extend(batch_results)
+    if len(results) != len(paragraphs):
+        raise RuntimeError("Пакетная обработка изменила количество абзацев.")
+    return results
 
 def table_segments_time(json_file_path):
     with open(json_file_path, "r", encoding="utf-8") as f:
@@ -254,15 +391,15 @@ class create_docx:
             paragraphs_start_time[idx] = prev_end
             prev_end = end_time
 
+        processed_paragraphs = process_paragraphs_in_batches(
+            paragraphs, modify_text=UseTextModify, client=self.client
+        )
         paragraphs_time_scr = {}
 
-        for idx, row in enumerate(paragraphs_table, start=1):
-            paragraph, end_time = row  # ("текст", end)
-
-            image_is_required_result = image_is_required(paragraph, client=self.client)
-
-            #if image_is_required_result == "1\n" or image_is_required_result == "1" or image_is_required_result == 1:
-            if image_is_required_result:
+        for result, row in zip(processed_paragraphs, paragraphs_table):
+            idx = result["number"]
+            _, end_time = row
+            if result["image_required"]:
                 # Проверяем, есть ли уже такой end_time в словаре
                 existing_keys = [k for k, v in paragraphs_time_scr.items() if v == end_time]
 
@@ -275,12 +412,9 @@ class create_docx:
                     # Если нет — добавляем
                     paragraphs_time_scr[idx] = end_time
 
-        if UseTextModify==True:
-            print("Проводим улучшение текста...")
-            text_modifier = TextModify(client=self.client)
-            for i in range(len(paragraphs)):
-                # paragraphs[i] = text_modifier.improve_text(paragraphs[i])
-                paragraphs[i] = text_modifier.clean_paragraph_with_context_window(paragraphs, i)
+        if UseTextModify:
+            print("Проводим пакетное улучшение текста...")
+            paragraphs = [result["clean_text"] for result in processed_paragraphs]
             
 
         # === Шаг 3: LLM разбивает на разделы (сохраняем оригинальные абзацы) ===
@@ -326,6 +460,13 @@ class create_docx:
             # --- Режим A: Есть упоминания "сейчас на экране" ---
             if paragraphs_time_scr:
                 print("Вставляем текст с разделами и кадрами по упоминаниям.")
+                requested_frames = {
+                    paragraph_number: format_seconds_hhmmss(end_time)
+                    for paragraph_number, end_time in paragraphs_time_scr.items()
+                }
+                extracted_frames = class_picture_description.save_frames_at_times(
+                    video_path, requested_frames
+                )
                 for section in sections:
                     # Вставляем заголовок раздела
                     doc.add_heading(section['title'], level=1)
@@ -339,15 +480,8 @@ class create_docx:
 
                             # Проверяем, нужно ли вставить картинку ПОСЛЕ этого абзаца
                             if current_paragraph_index in paragraphs_time_scr:
-                                time_screen = paragraphs_time_scr[current_paragraph_index]
-                                total_seconds = int(time_screen)
-                                hours = total_seconds // 3600
-                                minutes = (total_seconds % 3600) // 60
-                                seconds = total_seconds % 60
-                                formatted_time = f"{hours:02}:{minutes:02}:{seconds:02}"
-                                frame_at_time = class_picture_description.save_frame_at_time(
-                                    video_path, formatted_time
-                                )
+                                formatted_time = requested_frames[current_paragraph_index]
+                                frame_at_time = extracted_frames.get(current_paragraph_index)
                                 if frame_at_time:
                                     doc.add_picture(frame_at_time, width=Mm(165))
                                 else:
@@ -365,29 +499,27 @@ class create_docx:
                     raise ValueError("Не удалось определить длительность видео.")
 
                 time_stamps = [total_duration * i / 6 for i in range(1, 6)]
-                frame_paths = []
-                import uuid
-                import shutil
-
-                base_temp_name = "frame.jpg"
-                video_dir = os.path.dirname(video_path)
+                requested_frames = {}
                 for i, t in enumerate(time_stamps):
                     total_seconds = int(t)
                     hours = total_seconds // 3600
                     minutes = (total_seconds % 3600) // 60
                     seconds = total_seconds % 60
                     formatted_time = f"{hours:02}:{minutes:02}:{seconds:02}"
-                    temp_frame = class_picture_description.save_frame_at_time(video_path, formatted_time)
-                    if not temp_frame:
+                    requested_frames[i] = formatted_time
+                extracted_frames = class_picture_description.save_frames_at_times(
+                    video_path, requested_frames
+                )
+                frame_paths = []
+                for i, formatted_time in requested_frames.items():
+                    frame_path = extracted_frames.get(i)
+                    if not frame_path:
                         logging.warning(
                             "Кадр для таймкода %s не будет добавлен в DOCX.",
                             formatted_time,
                         )
                         continue
-                    unique_path = f"temp_frame_{i}_{uuid.uuid4().hex[:8]}.jpg"
-                    output_path = os.path.join(video_dir, unique_path)
-                    shutil.copy(temp_frame, output_path)
-                    frame_paths.append(output_path)
+                    frame_paths.append(frame_path)
 
                 # Определяем, после каких **общих** абзацев вставлять картинки
                 total_paragraphs = len(paragraphs)

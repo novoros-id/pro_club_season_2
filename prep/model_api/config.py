@@ -15,6 +15,7 @@ class MWSConfig:
     connect_timeout: float = 10.0
     read_timeout: float = 600.0
     embedding_batch_size: int = 64
+    paragraph_processing_batch_size: int = 15
     paragraph_similarity_threshold: float = 0.7
 
     @classmethod
@@ -53,5 +54,8 @@ class MWSConfig:
             connect_timeout=positive_float("MWS_CONNECT_TIMEOUT", 10.0),
             read_timeout=positive_float("MWS_READ_TIMEOUT", 600.0),
             embedding_batch_size=positive_int("MWS_EMBEDDING_BATCH_SIZE", 64),
+            paragraph_processing_batch_size=positive_int(
+                "MWS_PARAGRAPH_BATCH_SIZE", 15
+            ),
             paragraph_similarity_threshold=threshold,
         )

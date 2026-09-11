@@ -14,12 +14,15 @@ if str(PREP_DIR) not in sys.path:
     sys.path.insert(0, str(PREP_DIR))
 
 from create_file.create_docx import (  # noqa: E402
+    _parse_paragraph_batch_response,
     image_is_required,
     parse_json_response,
     parse_sections_response,
+    process_paragraphs_in_batches,
 )
 from model_api.config import MWSConfig  # noqa: E402
 from model_api.mws_client import MWSAPIError, MWSClient  # noqa: E402
+from transcription_audio.transcription import Transcription  # noqa: E402
 from text_to_paragraphs.text_to_paragraphs import (  # noqa: E402
     cosine_similarity,
     text_to_paragraphs,
@@ -92,6 +95,34 @@ class MWSClientTests(unittest.TestCase):
         ])
         self.assertEqual(result["audio_file"], path)
 
+    def test_transcription_request_uses_only_documented_mws_fields(self):
+        session = Mock()
+        session.request.return_value = FakeResponse({
+            "text": "Текст",
+            "segments": [{"start": 0, "end": 1, "text": "Текст"}],
+        })
+        handle, path = tempfile.mkstemp(suffix=".wav")
+        os.close(handle)
+        try:
+            client_with_session(session).transcribe(path)
+        finally:
+            os.unlink(path)
+
+        form_data = session.request.call_args.kwargs["data"]
+        self.assertEqual(
+            set(form_data), {"model", "language", "response_format"}
+        )
+        self.assertNotIn("prompt", form_data)
+
+    def test_legacy_transcription_prompt_is_not_forwarded_to_mws(self):
+        client = Mock()
+        client.transcribe.return_value = {"full_text": "", "segments": []}
+
+        result = Transcription(prompt="Термины 1С", client=client).transcribe("audio.wav")
+
+        self.assertEqual(result, {"full_text": "", "segments": []})
+        client.transcribe.assert_called_once_with("audio.wav", language="ru")
+
     def test_transcription_requires_segments(self):
         session = Mock()
         session.request.return_value = FakeResponse({"text": "Без сегментов"})
@@ -119,6 +150,60 @@ class StructuredOutputTests(unittest.TestCase):
             {"start_paragraph": 4, "title": "Проверка"},
         ]})
         self.assertEqual(parse_sections_response(response), [(1, "Настройка"), (4, "Проверка")])
+
+    def test_paragraph_batches_preserve_count_order_and_use_one_call_per_batch(self):
+        client = Mock()
+        client.config.paragraph_processing_batch_size = 2
+        client.generate_text.side_effect = [
+            json.dumps({"paragraphs": [
+                {"number": 1, "clean_text": "Чистый 1", "image_required": False},
+                {"number": 2, "clean_text": "Чистый 2", "image_required": True},
+            ]}),
+            json.dumps({"paragraphs": [
+                {"number": 3, "clean_text": "Чистый 3", "image_required": False},
+            ]}),
+        ]
+
+        result = process_paragraphs_in_batches(
+            ["Текст 1", "Текст 2", "Текст 3"], client=client
+        )
+
+        self.assertEqual([row["number"] for row in result], [1, 2, 3])
+        self.assertEqual([row["clean_text"] for row in result], [
+            "Чистый 1", "Чистый 2", "Чистый 3",
+        ])
+        self.assertEqual(client.generate_text.call_count, 2)
+
+    def test_paragraph_batch_rejects_missing_or_duplicate_numbers(self):
+        response = json.dumps({"paragraphs": [
+            {"number": 1, "clean_text": "Один", "image_required": False},
+            {"number": 1, "clean_text": "Дубль", "image_required": True},
+        ]})
+        with self.assertRaisesRegex(ValueError, "повторяющийся"):
+            _parse_paragraph_batch_response(response, [1, 2], True)
+
+    def test_invalid_batch_falls_back_only_for_that_batch(self):
+        client = Mock()
+        client.config.paragraph_processing_batch_size = 2
+        client.generate_text.side_effect = [
+            "не JSON",
+            json.dumps({"paragraphs": [
+                {"number": 3, "clean_text": "Три", "image_required": False},
+            ]}),
+        ]
+        fallback_rows = [
+            {"number": 1, "clean_text": "Один", "image_required": False},
+            {"number": 2, "clean_text": "Два", "image_required": True},
+        ]
+        with patch(
+            "create_file.create_docx._fallback_paragraph_batch",
+            return_value=fallback_rows,
+        ) as fallback:
+            result = process_paragraphs_in_batches(["1", "2", "3"], client=client)
+
+        self.assertEqual([row["number"] for row in result], [1, 2, 3])
+        fallback.assert_called_once()
+        self.assertEqual(client.generate_text.call_count, 2)
 
 
 class ParagraphTests(unittest.TestCase):

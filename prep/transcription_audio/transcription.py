@@ -10,6 +10,8 @@ class Transcription:
 
     def __init__(self, model_name=None, language="ru", prompt="", client=None):
         # Legacy arguments remain accepted, while model selection is centralized.
+        # MWS /audio/transcriptions currently has no documented prompt field, so
+        # prompt is intentionally not forwarded as an unsupported form parameter.
         self.language = language
         self.client = client or get_default_client()
         self._last_transcription_result = None

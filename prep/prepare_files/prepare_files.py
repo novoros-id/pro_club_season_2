@@ -1,6 +1,6 @@
 import subprocess
 import os
-import shutil
+import json
 import ffmpeg
 
 # Константа: максимальная длительность в секундах (например, 30 минуты)
@@ -22,22 +22,17 @@ class prepare_files:
         if not os.path.exists(self.file_name):
             raise FileNotFoundError(f"Файл {self.file_name} не найден.")
 
-        base_path, ext = os.path.splitext(self.file_name)
+        base_path, _ = os.path.splitext(self.file_name)
         dir_path = os.path.dirname(self.file_name)
         file_name_only = os.path.basename(base_path)
 
-        # Проверяем, это видео или аудио
-        try:
-            output = subprocess.check_output([
-                "ffprobe", "-v", "error",
-                "-select_streams", "v:0",
-                "-show_entries", "stream=codec_type",
-                "-of", "default=nw=1",
-                self.file_name
-            ], stderr=subprocess.STDOUT).decode('utf-8')
-            is_video = 'video' in output
-        except subprocess.CalledProcessError:
-            is_video = False
+        media_info = self._probe_media()
+        video_stream = next(
+            (stream for stream in media_info.get("streams", [])
+             if stream.get("codec_type") == "video"),
+            None,
+        )
+        is_video = video_stream is not None
 
         result = {
             'video': '',
@@ -45,18 +40,29 @@ class prepare_files:
         }
 
         if is_video:
-            # Обработка видео: конвертация + извлечение аудио
+            # Keep an already suitable, short MP4 untouched. OpenCV only needs a
+            # decodable H.264 video stream; transcription audio is produced directly
+            # from the source below and does not require an AAC intermediate track.
             video_output = os.path.join(dir_path, f"{file_name_only}_PV.mp4")
             audio_output = os.path.join(dir_path, f"{file_name_only}_PA.wav")
-
-            # Конвертируем видео (с обрезкой по MAX_DURATION внутри метода)
-            converted_video = self.convert_to_mp4_h264(video_output)
-            result['video'] = converted_video
-
-            # Извлекаем аудио из обрезанного видео
-            temp_self = prepare_files(converted_video)
-            cleaned_audio = temp_self.extract_clean_audio(audio_output)
-            result['audio'] = cleaned_audio
+            format_names = set(
+                media_info.get("format", {}).get("format_name", "").split(",")
+            )
+            try:
+                duration = float(media_info.get("format", {}).get("duration", 0))
+            except (TypeError, ValueError):
+                duration = 0
+            suitable_video = (
+                video_stream.get("codec_name") == "h264"
+                and "mp4" in format_names
+                and 0 < duration <= MAX_DURATION
+            )
+            result['video'] = (
+                self.file_name
+                if suitable_video
+                else self.convert_to_mp4_h264(video_output, media_info=media_info)
+            )
+            result['audio'] = self.extract_clean_audio(audio_output)
 
         else:
             # Это аудиофайл — просто очищаем его (с обрезкой)
@@ -66,6 +72,16 @@ class prepare_files:
 
         return result
 
+    def _probe_media(self):
+        try:
+            output = subprocess.check_output([
+                "ffprobe", "-v", "error", "-show_streams", "-show_format",
+                "-of", "json", self.file_name,
+            ], stderr=subprocess.STDOUT).decode("utf-8")
+            return json.loads(output)
+        except (subprocess.CalledProcessError, json.JSONDecodeError) as exc:
+            raise RuntimeError("Ошибка при анализе файла через ffprobe.") from exc
+
     def check_nvenc_available(self):
         try:
             output = subprocess.check_output(["ffmpeg", "-encoders"], stderr=subprocess.DEVNULL).decode('utf-8')
@@ -73,7 +89,7 @@ class prepare_files:
         except subprocess.CalledProcessError:
             return False
 
-    def convert_to_mp4_h264(self, output_video_path=None):
+    def convert_to_mp4_h264(self, output_video_path=None, media_info=None):
         if not os.path.exists(self.file_name):
             raise FileNotFoundError(f"Файл {self.file_name} не найден.")
 
@@ -83,20 +99,18 @@ class prepare_files:
         else:
             output_path = output_video_path
 
-        try:
-            codec = subprocess.check_output([
-                "ffprobe", "-v", "error",
-                "-select_streams", "v:0",
-                "-show_entries", "stream=codec_name",
-                "-of", "default=nokey=1:noprint_wrappers=1",
-                self.file_name
-            ]).decode('utf-8').strip()
-        except subprocess.CalledProcessError:
-            raise RuntimeError("Ошибка при анализе файла через ffprobe.")
-
-        ext = os.path.splitext(self.file_name)[1].lower()
-
-        use_nvenc = self.check_nvenc_available()
+        media_info = media_info or self._probe_media()
+        video_stream = next(
+            (stream for stream in media_info.get("streams", [])
+             if stream.get("codec_type") == "video"),
+            None,
+        )
+        if video_stream is None:
+            raise ValueError("Файл не содержит видеопоток.")
+        codec = video_stream.get("codec_name")
+        format_names = set(
+            media_info.get("format", {}).get("format_name", "").split(",")
+        )
 
         # Формируем команду ffmpeg
         cmd = ["ffmpeg", "-y", "-i", self.file_name]
@@ -104,27 +118,28 @@ class prepare_files:
         # Добавляем ограничение по времени
         cmd += ["-t", str(MAX_DURATION)]  # Обрезаем до MAX_DURATION секунд
 
-        if codec == 'h264' and ext == '.mp4':
-            # Даже если формат правильный, всё равно может быть нужно обрезать
+        if codec == 'h264' and 'mp4' in format_names:
             print(f"Файл уже mp4+h264, но будет обрезан до {MAX_DURATION} секунд -> {output_path}")
             cmd += [
-                "-c:v", "copy",  # копируем без перекодирования
-                "-c:a", "aac", "-b:a", "128k",
+                "-map", "0:v:0", "-c:v", "copy", "-an",
                 output_path
             ]
         else:
+            use_nvenc = self.check_nvenc_available()
             if use_nvenc:
                 print(f"GPU ускорение доступно. Конвертируем и обрезаем до {MAX_DURATION} секунд -> {output_path}")
                 cmd += [
+                    "-map", "0:v:0",
                     "-c:v", "h264_nvenc", "-preset", "fast", "-cq", "23",
-                    "-c:a", "aac", "-b:a", "128k",
+                    "-an",
                     output_path
                 ]
             else:
                 print(f"GPU недоступно. Используем CPU, обрезаем до {MAX_DURATION} секунд -> {output_path}")
                 cmd += [
+                    "-map", "0:v:0",
                     "-c:v", "libx264", "-preset", "ultrafast", "-crf", "23",
-                    "-c:a", "aac", "-b:a", "128k",
+                    "-an",
                     output_path
                 ]
 
@@ -136,108 +151,39 @@ class prepare_files:
         if not os.path.exists(self.file_name):
             raise FileNotFoundError(f"Файл {self.file_name} не найден.")
 
-        temp_raw_audio = os.path.splitext(self.file_name)[0] + "_temp_raw.wav"
-        temp_normalized_audio = os.path.splitext(self.file_name)[0] + "_temp_normalized.wav"
-
         if output_audio_path is None:
             output_audio_path = os.path.splitext(self.file_name)[0] + "_clean.wav"
-
-        try:
-            # Шаг 1: Извлечь первые MAX_DURATION секунд аудио
-            (
-                ffmpeg
-                .input(self.file_name, t=MAX_DURATION)  # Ограничиваем длительность
-                .output(temp_raw_audio, ac=1, ar=16000, format="wav")
-                .overwrite_output()
-                .run(capture_stdout=True, capture_stderr=True)
-            )
-
-            # Шаг 2: Нормализация громкости
-            (
-                ffmpeg
-                .input(temp_raw_audio)
-                .filter_("loudnorm", i=-16, tp=-1.5, lra=11)
-                .output(temp_normalized_audio, ac=1, ar=16000, format="wav")
-                .overwrite_output()
-                .run(capture_stdout=True, capture_stderr=True)
-            )
-
-            # Шаг 3: Шумоподавление
-            (
-                ffmpeg
-                .input(temp_normalized_audio)
-                .filter_("highpass", f=200)
-                .filter_("lowpass", f=5000)
-                .output(output_audio_path, ac=1, ar=16000, format="wav")
-                .overwrite_output()
-                .run(capture_stdout=True, capture_stderr=True)
-            )
-
-            # Удаление временных файлов
-            for temp_file in [temp_raw_audio, temp_normalized_audio]:
-                if os.path.exists(temp_file):
-                    os.remove(temp_file)
-
-            print(f"Аудио успешно извлечено, очищено и обрезано до {MAX_DURATION} секунд -> {output_audio_path}")
-            return output_audio_path
-
-        except ffmpeg.Error as e:
-            print("Ошибка ffmpeg:")
-            print("STDOUT:", e.stdout.decode() if e.stdout else "")
-            print("STDERR:", e.stderr.decode() if e.stderr else "")
-            raise RuntimeError(f"Ошибка при обработке аудио через ffmpeg: {e}")
+        return self._write_clean_audio(output_audio_path, lowpass_frequency=5000)
 
     def clean_audio(self, output_audio_path=None):
         if not os.path.exists(self.file_name):
             raise FileNotFoundError(f"Файл {self.file_name} не найден.")
 
-        temp_raw_audio = os.path.splitext(self.file_name)[0] + "_temp_raw.wav"
-        temp_normalized_audio = os.path.splitext(self.file_name)[0] + "_temp_normalized.wav"
-
         if output_audio_path is None:
             output_audio_path = os.path.splitext(self.file_name)[0] + "_clean.wav"
+        return self._write_clean_audio(output_audio_path, lowpass_frequency=3000)
 
+    def _write_clean_audio(self, output_audio_path, lowpass_frequency):
+        """Decode, normalize and filter into the final STT WAV in one FFmpeg run."""
         try:
-            # Шаг 1: Привести к нужному формату и обрезать
-            (
-                ffmpeg
-                .input(self.file_name, t=MAX_DURATION)  # Обрезка до MAX_DURATION
-                .output(temp_raw_audio, ac=1, ar=16000, format="wav")
-                .overwrite_output()
-                .run(capture_stdout=True, capture_stderr=True)
-            )
-
-            # Шаг 2: Нормализация
-            (
-                ffmpeg
-                .input(temp_raw_audio)
+            stream = (
+                ffmpeg.input(self.file_name, t=MAX_DURATION).audio
                 .filter_("loudnorm", i=-16, tp=-1.5, lra=11)
-                .output(temp_normalized_audio, ac=1, ar=16000, format="wav")
-                .overwrite_output()
-                .run(capture_stdout=True, capture_stderr=True)
-            )
-
-            # Шаг 3: Фильтрация шума
-            (
-                ffmpeg
-                .input(temp_normalized_audio)
                 .filter_("highpass", f=200)
-                .filter_("lowpass", f=3000)
-                .output(output_audio_path, ac=1, ar=16000, format="wav")
+                .filter_("lowpass", f=lowpass_frequency)
+            )
+            (
+                ffmpeg.output(
+                    stream, output_audio_path, ac=1, ar=16000,
+                    acodec="pcm_s16le", format="wav",
+                )
                 .overwrite_output()
                 .run(capture_stdout=True, capture_stderr=True)
             )
-
-            # Удаление временных файлов
-            for temp_file in [temp_raw_audio, temp_normalized_audio]:
-                if os.path.exists(temp_file):
-                    os.remove(temp_file)
-
             print(f"Аудио очищено и обрезано до {MAX_DURATION} секунд -> {output_audio_path}")
             return output_audio_path
-
         except ffmpeg.Error as e:
             print("Ошибка ffmpeg:")
             print("STDOUT:", e.stdout.decode() if e.stdout else "")
             print("STDERR:", e.stderr.decode() if e.stderr else "")
-            raise RuntimeError(f"Ошибка при обработке аудио: {e}")
+            raise RuntimeError(f"Ошибка при обработке аудио через ffmpeg: {e}")
