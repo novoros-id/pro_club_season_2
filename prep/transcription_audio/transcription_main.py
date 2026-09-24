@@ -1,8 +1,6 @@
 import os
-from typing import Tuple, List
 from pathlib import Path
 from prep.transcription_audio.transcription import Transcription
-from langchain_core.documents import Document
 
 
 # TODO: заменить на передачу из класса PrepareAudioVideo
@@ -13,10 +11,11 @@ def transcription_main(
     model_name: str = "medium",
     language: str = "ru",
     out_dir: str | None = None
-) -> Tuple[str | None, List[Document] | None]:
+) -> tuple[str | None, dict | None]:
     """
     Запускает распознавание аудиофайла и сохраняет результат в JSON.
-    Если return_docs=True — возвращает (json_path, docs), иначе печатает в консоль.
+    Совместимый флаг return_docs теперь возвращает нормализованный результат вместо
+    удалённых RAG/Document-объектов.
     """
 
     if not os.path.isfile(audio_file):
@@ -33,17 +32,19 @@ def transcription_main(
         out_json_path = str(Path(out_dir) / f"{base_name}.whisper.json")
 
     transcriber = Transcription(model_name=model_name, language=language)
-    json_path, docs = transcriber.transcribe_to_documents(audio_file, out_json_path)
+    json_path = transcriber.save_json(audio_file, out_json_path)
+    result = transcriber.last_result
 
     if return_docs:
-        return json_path, docs
+        return json_path, result
 
     print(f"JSON сохранён: {json_path}")
-    print(f"Сегментов: {len(docs)}")
-    for d in docs[:3]:
+    segments = result.get("segments", []) if result else []
+    print(f"Сегментов: {len(segments)}")
+    for segment in segments[:3]:
         print("---")
-        print(f"Text: {d.page_content}")
-        print(f"Metadata: {d.metadata}")
+        print(f"Text: {segment.get('text', '')}")
+        print(f"Time: {segment.get('start')} - {segment.get('end')}")
     return json_path, None
 
 def main():

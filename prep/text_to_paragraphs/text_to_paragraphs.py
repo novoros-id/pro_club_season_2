@@ -1,150 +1,110 @@
-from sentence_transformers import SentenceTransformer, util
-import nltk
-from typing import List, Tuple, Optional, Union
+import math
+import numbers
+import re
+from typing import List, Optional, Tuple, Union
 
-# Загрузка токенизатора предложений (один раз при импорте)
-try:
-    nltk.data.find('tokenizers/punkt')
-except LookupError:
-    nltk.download('punkt', quiet=True)
+from model_api import get_default_client
+
+
+def cosine_similarity(left, right):
+    if len(left) != len(right):
+        raise ValueError("Нельзя сравнить embeddings различной размерности.")
+    if not left:
+        raise ValueError("Нельзя сравнить пустые embeddings.")
+    if not all(isinstance(value, numbers.Real) for value in list(left) + list(right)):
+        raise ValueError("Embedding содержит нечисловое значение.")
+    dot = sum(float(a) * float(b) for a, b in zip(left, right))
+    left_norm = math.sqrt(sum(float(value) ** 2 for value in left))
+    right_norm = math.sqrt(sum(float(value) ** 2 for value in right))
+    if left_norm == 0.0 or right_norm == 0.0:
+        return 0.0
+    return dot / (left_norm * right_norm)
 
 
 class text_to_paragraphs:
-    _model = None  # Общая модель для всех экземпляров (опционально)
-
-    def __init__(self, text: Union[str, List[Tuple[str, float]]], segments_time: Optional[List[Tuple[str, float]]] = None):
-        """
-        Инициализация.
-        Поддерживает два режима:
-        1. text = строка, segments_time = None → обработка обычного текста.
-        2. text = игнорируется, segments_time = [(sentence, timestamp), ...] → обработка с врем. метками.
-        """
+    def __init__(
+        self,
+        text: Union[str, List[Tuple[str, float]]],
+        segments_time: Optional[List[Tuple[str, float]]] = None,
+        client=None,
+    ):
+        self.client = client or get_default_client()
         if segments_time is not None:
             self.segments_time = segments_time
-            self.mode = 'segments'
+            self.mode = "segments"
         else:
             self.text = text.strip() if isinstance(text, str) else ""
-            self.mode = 'text'
-
-    @classmethod
-    def get_model(cls):
-        """Ленивая загрузка модели один раз."""
-        if cls._model is None:
-            cls._model = SentenceTransformer('all-MiniLM-L6-v2')
-        return cls._model
+            self.mode = "text"
 
     def _split_sentences_from_text(self, text: str) -> List[str]:
-        """Надёжное разбиение текста на предложения с сохранением пунктуации."""
         if not text:
             return []
-        # nltk поддерживает русский язык через параметр language
-        sentences = nltk.sent_tokenize(text, language='russian')
-        # Убираем лишние пробелы в начале/конце
-        return [s.strip() for s in sentences if s.strip()]
+        # Network-free baseline splitter. Segment mode, used by the main flow, does
+        # not perform any extra tokenization.
+        return [item.strip() for item in re.split(r"(?<=[.!?])\s+", text) if item.strip()]
 
-    def get_text_to_paragraphs(
-        self,
-        threshold: float = 0.7,
-        min_sents: int = 3,
-        max_sents: int = 12,
-        min_words: int = 15,
-        max_words: int = 250
-    ) -> str:
-        """Возвращает текст, разбитый на абзацы (как строку с отступами)."""
-        paragraphs = self.get_text_to_paragraphs_array(threshold, min_sents, max_sents, min_words, max_words)
-        return '\n'.join(f"\t{p}" for p in paragraphs)
+    def _inputs(self):
+        if self.mode == "segments":
+            return ([str(item[0]).strip() for item in self.segments_time],
+                    [float(item[1]) for item in self.segments_time])
+        sentences = self._split_sentences_from_text(self.text)
+        return sentences, [float(index) for index in range(len(sentences))]
 
-    def get_text_to_paragraphs_array(
-        self,
-        threshold: float = 0.7,
-        min_sents: int = 2,
-        max_sents: int = 8,
-        min_words: int = 15,
-        max_words: int = 150
-    ) -> List[str]:
-        """Возвращает список абзацев (без временных меток)."""
-        if self.mode == 'segments':
-            raw_sentences = [s for s, _ in self.segments_time]
-            times = [t for _, t in self.segments_time]
-        else:
-            raw_sentences = self._split_sentences_from_text(self.text)
-            times = list(range(len(raw_sentences)))  # фиктивные метки
-
-        if not raw_sentences:
-            return []
-
-        model = self.get_model()
-        embeddings = model.encode(raw_sentences, convert_to_tensor=True)
-        sims = util.pytorch_cos_sim(embeddings, embeddings)
-
-        paragraphs = []
-        current_paragraph = []
-
-        for i in range(len(raw_sentences)):
-            current_paragraph.append(raw_sentences[i])
-
-            word_count = sum(len(s.split()) for s in current_paragraph)
-
-            # Условия для разрыва
-            semantic_break = (i < len(raw_sentences) - 1 and sims[i][i + 1].item() < threshold)
-            long_enough = (len(current_paragraph) >= min_sents or word_count >= min_words)
-            too_long = (len(current_paragraph) >= max_sents or word_count >= max_words)
-
-            if (semantic_break and long_enough) or too_long:
-                paragraphs.append(" ".join(current_paragraph))
-                current_paragraph = []
-
-        # Остаток
-        if current_paragraph:
-            paragraphs.append(" ".join(current_paragraph))
-
-        return paragraphs
-
-    def get_text_to_paragraphs_table(
-        self,
-        threshold: float = 0.7,
-        min_sents: int = 2,
-        max_sents: int = 8,
-        min_words: int = 15,
-        max_words: int = 150
-    ) -> List[Tuple[str, float]]:
-        """
-        Возвращает список кортежей: (абзац, временная_метка_последнего_предложения).
-        Работает ТОЛЬКО если был передан segments_time.
-        """
-        if self.mode != 'segments':
-            raise ValueError("Метод get_text_to_paragraphs_table требует передачи segments_time при инициализации.")
-
-        sentences = [s for s, _ in self.segments_time]
-        times = [t for _, t in self.segments_time]
-
+    def _build(self, threshold, min_sents, max_sents, min_words, max_words):
+        sentences, times = self._inputs()
         if not sentences:
             return []
-
-        model = self.get_model()
-        embeddings = model.encode(sentences, convert_to_tensor=True)
-        sims = util.pytorch_cos_sim(embeddings, embeddings)
+        if len(sentences) == 1:
+            return [(sentences[0], times[0])]
+        embeddings = self.client.embed_texts(sentences)
+        if len(embeddings) != len(sentences):
+            raise ValueError("Число embeddings не совпадает с числом предложений.")
+        similarities = [
+            cosine_similarity(embeddings[index], embeddings[index + 1])
+            for index in range(len(embeddings) - 1)
+        ]
 
         paragraphs = []
-        current_paragraph = []
+        current_sentences = []
         current_times = []
-
-        for i in range(len(sentences)):
-            current_paragraph.append(sentences[i])
-            current_times.append(times[i])
-
-            word_count = sum(len(s.split()) for s in current_paragraph)
-
-            semantic_break = (i < len(sentences) - 1 and sims[i][i + 1].item() < threshold)
-            long_enough = (len(current_paragraph) >= min_sents or word_count >= min_words)
-            too_long = (len(current_paragraph) >= max_sents or word_count >= max_words)
-
+        for index, sentence in enumerate(sentences):
+            current_sentences.append(sentence)
+            current_times.append(times[index])
+            word_count = sum(len(item.split()) for item in current_sentences)
+            semantic_break = index < len(similarities) and similarities[index] < threshold
+            long_enough = len(current_sentences) >= min_sents or word_count >= min_words
+            too_long = len(current_sentences) >= max_sents or word_count >= max_words
             if (semantic_break and long_enough) or too_long:
-                paragraphs.append((" ".join(current_paragraph), current_times[-1]))
-                current_paragraph = []
-                current_times = []
-
-        if current_paragraph:
-            paragraphs.append((" ".join(current_paragraph), current_times[-1]))
-
+                paragraphs.append((" ".join(current_sentences), current_times[-1]))
+                current_sentences, current_times = [], []
+        if current_sentences:
+            paragraphs.append((" ".join(current_sentences), current_times[-1]))
         return paragraphs
+
+    def _threshold(self, value):
+        if value is not None:
+            return float(value)
+        # 0.7 is the old model's starting threshold and must be calibrated on real
+        # BGE-M3 transcription data after migration.
+        return self.client.config.paragraph_similarity_threshold
+
+    def get_text_to_paragraphs(self, threshold=None, min_sents=3, max_sents=12,
+                               min_words=15, max_words=250):
+        paragraphs = self.get_text_to_paragraphs_array(
+            threshold, min_sents, max_sents, min_words, max_words
+        )
+        return "\n".join(f"\t{paragraph}" for paragraph in paragraphs)
+
+    def get_text_to_paragraphs_array(self, threshold=None, min_sents=2, max_sents=8,
+                                     min_words=15, max_words=150):
+        return [row[0] for row in self._build(
+            self._threshold(threshold), min_sents, max_sents, min_words, max_words
+        )]
+
+    def get_text_to_paragraphs_table(self, threshold=None, min_sents=2, max_sents=8,
+                                     min_words=15, max_words=150):
+        if self.mode != "segments":
+            raise ValueError("Метод get_text_to_paragraphs_table требует segments_time.")
+        return self._build(
+            self._threshold(threshold), min_sents, max_sents, min_words, max_words
+        )

@@ -1,2 +1,8 @@
 python-telegram-bot==21.0
-pyTelegramBotAPI
+Flask
+python-dotenv
+python-docx
+opencv-python
+ffmpeg-python==0.2.0
+playwright==1.44.0
+requests==2.32.4
